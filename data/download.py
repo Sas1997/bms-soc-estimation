@@ -18,6 +18,7 @@ import argparse
 import json
 import sys
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -33,8 +34,13 @@ ROOT_FILES = {
 RAW_DIR = Path(__file__).resolve().parent / "raw" / "LG_HG2"
 
 
+# Mendeley's file endpoint rejects Python's default "Python-urllib" User-Agent,
+# so every request sends an explicit one.
+HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; socest-downloader/0.1)", "Accept": "*/*"}
+
+
 def _get_json(url: str):
-    req = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": "socest-downloader"})
+    req = urllib.request.Request(url, headers={**HEADERS, "Accept": "application/json"})
     with urllib.request.urlopen(req, timeout=60) as r:
         return json.load(r)
 
@@ -54,27 +60,44 @@ def list_files(folder_id: str):
     return _get_json(f"{API}/{DATASET_ID}/files?folder_id={folder_id}&version={VERSION}")
 
 
+def _candidate_urls(entry: dict):
+    """The documented public-files endpoint first, then any direct URL the API listing provides."""
+    urls = [FILES_URL.format(ds=DATASET_ID, fid=entry["id"])]
+    details = entry.get("content_details") or {}
+    for key in ("download_url", "view_url"):
+        if details.get(key) and details[key] not in urls:
+            urls.append(details[key])
+    return urls
+
+
 def download(entry: dict, dest: Path, retries: int = 3):
     expected = _size(entry)
     if dest.exists() and expected is not None and dest.stat().st_size == expected:
         return "cached"
-    url = FILES_URL.format(ds=DATASET_ID, fid=entry["id"])
     dest.parent.mkdir(parents=True, exist_ok=True)
-    for attempt in range(retries):
-        try:
-            tmp = dest.with_suffix(dest.suffix + ".part")
-            with urllib.request.urlopen(url, timeout=120) as r, open(tmp, "wb") as f:
-                while chunk := r.read(1 << 20):
-                    f.write(chunk)
-            if expected is not None and tmp.stat().st_size != expected:
-                raise IOError(f"size mismatch: got {tmp.stat().st_size}, expected {expected}")
-            tmp.replace(dest)
-            return "downloaded"
-        except Exception as exc:  # retry on network errors
-            if attempt == retries - 1:
-                raise
-            print(f"  retry {attempt + 1} for {dest.name}: {exc}", file=sys.stderr)
-            time.sleep(2 * (attempt + 1))
+    tmp = dest.with_suffix(dest.suffix + ".part")
+    errors = []
+    for url in _candidate_urls(entry):
+        for attempt in range(retries):
+            try:
+                req = urllib.request.Request(url, headers=HEADERS)
+                with urllib.request.urlopen(req, timeout=120) as r, open(tmp, "wb") as f:
+                    while chunk := r.read(1 << 20):
+                        f.write(chunk)
+                if expected is not None and tmp.stat().st_size != expected:
+                    raise IOError(f"size mismatch: got {tmp.stat().st_size}, expected {expected}")
+                tmp.replace(dest)
+                return "downloaded"
+            except urllib.error.HTTPError as exc:
+                errors.append(f"{url} -> HTTP {exc.code}")
+                if exc.code in (401, 403, 404):
+                    break  # not transient; try the next URL
+            except Exception as exc:  # network errors: retry
+                errors.append(f"{url} -> {exc}")
+                print(f"  retry {attempt + 1} for {dest.name}: {exc}", file=sys.stderr)
+                time.sleep(2 * (attempt + 1))
+    tmp.unlink(missing_ok=True)
+    raise RuntimeError(f"could not download {dest.name}:\n  " + "\n  ".join(errors))
 
 
 def main(argv=None):
@@ -88,16 +111,29 @@ def main(argv=None):
     if missing:
         sys.exit(f"Folders not found in dataset: {missing}. Available: {sorted(folders)}")
 
+    # The readme and PDF are documentation only; a failure there must not stop the data download.
     for entry in list_files("root"):
         if _name(entry) in ROOT_FILES:
-            print(f"root/{_name(entry)}: {download(entry, args.out / _name(entry))}")
+            try:
+                print(f"root/{_name(entry)}: {download(entry, args.out / _name(entry))}")
+            except RuntimeError as exc:
+                print(f"root/{_name(entry)}: skipped ({exc})", file=sys.stderr)
 
+    failed = []
     for temp in args.temps:
         entries = [e for e in list_files(folders[temp]) if _name(e).lower().endswith(".mat")]
         print(f"{temp}: {len(entries)} .mat files")
         for e in entries:
-            status = download(e, args.out / temp / _name(e))
-            print(f"  {_name(e)}: {status}")
+            try:
+                print(f"  {_name(e)}: {download(e, args.out / temp / _name(e))}")
+            except RuntimeError as exc:
+                failed.append(f"{temp}/{_name(e)}")
+                print(f"  {_name(e)}: FAILED ({exc})", file=sys.stderr)
+                if len(failed) == 3 and not any(p.exists() for p in args.out.rglob("*.mat")):
+                    sys.exit("First three data files failed and none succeeded; stopping. See errors above.")
+    if failed:
+        sys.exit(f"{len(failed)} files failed; rerun to retry (finished files are cached).")
+    print("All files downloaded.")
 
 
 if __name__ == "__main__":
