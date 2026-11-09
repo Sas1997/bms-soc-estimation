@@ -31,10 +31,11 @@ def test_parse_real_file_names(name, series, test, kind):
     assert tf.ambient_degc == 25.0
 
 
-def _columns(n=50, current=-3.0):
+def _columns(n=1000, current=-3.0):
+    """100 s at 0.1 s with voltage falling 4.1 -> 3.6 V (the cell is discharging)."""
     t = np.arange(n) * 0.1
     return {
-        "Time": t, "TimeStamp": t, "Voltage": np.linspace(4.1, 4.0, n),
+        "Time": t, "TimeStamp": t, "Voltage": np.linspace(4.1, 3.6, n),
         "Current": np.full(n, current), "Ah": current * t / 3600, "Wh": 3.7 * current * t / 3600,
         "Power": 3.7 * np.full(n, current), "Battery_Temp_degC": np.full(n, 25.3),
     }
@@ -55,7 +56,7 @@ def test_read_hdf5_mat(tmp_path):
         for k, v in _columns().items():
             g[k] = v[None, :]
     cols = lg_hg2.read_mat(p)
-    assert cols["Voltage"].shape == (50,)
+    assert cols["Voltage"].shape == (1000,)
 
 
 def _write_folder(root, sign):
@@ -85,3 +86,34 @@ def test_sign_detection_rejects_inconsistent_files(tmp_path):
     savemat(d / "10-28-18_01.48 549_Dis_0p5C_25degC_LGHG2.mat", {"meas": _columns(current=+1.5)})
     with pytest.raises(ValueError, match="inconsistent"):
         lg_hg2.detect_discharge_sign(lg_hg2.list_files(tmp_path))
+
+
+def test_sign_from_first_segment_when_file_also_recharges(tmp_path):
+    """Real C/20 files hold a discharge then a charge of similar length (about 50/50 samples)."""
+    d = tmp_path / "25degC"
+    d.mkdir()
+    dis, chg = _columns(current=-0.15), _columns(current=+0.15)
+    chg["Voltage"] = chg["Voltage"][::-1]
+    both = {k: np.concatenate([dis[k], chg[k] + (dis[k][-1] + 0.1 if k == "Time" else 0)]) for k in dis}
+    savemat(d / "10-26-18_09.29 549_C20DisCh_25degC_LGHG2.mat", {"meas": both})
+    assert lg_hg2.detect_discharge_sign(lg_hg2.list_files(tmp_path)) == -1
+
+
+def test_sign_detection_rejects_segment_that_raises_voltage(tmp_path):
+    d = tmp_path / "25degC"
+    d.mkdir()
+    c = _columns(current=-3.0)
+    c["Voltage"] = c["Voltage"][::-1]
+    savemat(d / "10-28-18_07.09 549_Dis_2C_25degC_LGHG2.mat", {"meas": c})
+    with pytest.raises(ValueError, match="does not discharge"):
+        lg_hg2.detect_discharge_sign(lg_hg2.list_files(tmp_path))
+
+
+def test_split_rules_have_no_overlap():
+    from socest.split import assign
+    assert assign("25degC", "Mixed1") == "train"
+    assert assign("25degC", "Mixed7") == "val"
+    assert assign("n20degC", "US06") == "test_unseen_cycle"
+    assert assign("10degC", "Mixed1") == "test_unseen_temp"  # held-out temperature wins over cycle name
+    with pytest.raises(ValueError):
+        assign("25degC", "HPPC")

@@ -26,11 +26,35 @@ RAW_COLUMNS = {
     "Voltage": ("voltage_v", "V"),
     "Current": ("current_a", "A"),
     "Ah": ("ah", "Ah"),
-    "Wh": ("wh", "Wh"),
     "Power": ("power_w", "W"),
     "Battery_Temp_degC": ("temp_degc", "degC"),
 }
 REQUIRED = ("Time", "Voltage", "Current", "Battery_Temp_degC")
+# Not loaded: "Wh" is stored as uint8 with a single constant value (3) in the files
+# inspected (for example 25degC/551_UDDS), so it carries no information.
+# "TimeStamp" is a wall-clock string; "Time" is used instead.
+
+# Tests excluded from all experiments, with the evidence found in the files.
+# Keys are (folder, series, test). See data/DATA_CARD.md for the numbers.
+EXCLUDE = {
+    ("25degC", "551", "HWFET"): "no load: 10 min of rest only, current is zero throughout",
+    ("40degC", "562", "Mixed4"): "not at 40 degC (cell 22.9 to 23.5 degC), truncated (0.32 h); preceding charge stopped at 3.39 V",
+    ("40degC", "562", "Mixed5"): "not at 40 degC (cell 23.9 to 24.5 degC), truncated (0.36 h)",
+    ("40degC", "562", "Mixed6"): "not at 40 degC (cell 23.2 to 25.2 degC), truncated (0.33 h)",
+    ("40degC", "562", "Mixed7"): "not at 40 degC (cell 22.7 to 24.4 degC), truncated (0.22 h)",
+    ("40degC", "562", "Mixed8"): "not at 40 degC (cell 22.8 to 24.0 degC), truncated (0.40 h)",
+    ("n10degC", "602", "Mixed4"): "416 s logging gap under load at t = 387 s (0.29 Ah passed during the gap per the tester Ah counter)",
+    ("10degC", "582", "LA92"): "full-charge start uncertain: re-run 5 days after its series with no charge file in series 582, "
+                               "3 logging restarts, rested start 4.170 V vs 4.184 to 4.187 V for the other rested 10 degC starts",
+}
+
+# Drive cycles are assumed to start fully charged. Checked per cycle: the file just
+# before it in the same folder must be a charge that reached the 4.2 V CV limit.
+# If no charge file precedes it, the cycle must start at rest (|I| < 0.1 A) at or
+# above FALLBACK_REST_V. A start-voltage threshold alone is NOT used: Mixed4 and
+# Mixed8 begin under load at t = 0, so their first voltage is a loaded voltage.
+CHARGE_CV_LIMIT_V = 4.195
+FALLBACK_REST_V = 4.17
 
 FOLDER_TEMPS = {"n20degC": -20.0, "n10degC": -10.0, "0degC": 0.0, "10degC": 10.0, "25degC": 25.0, "40degC": 40.0}
 
@@ -51,6 +75,15 @@ class TestFile:
     series: str
     test: str
     stamp: str
+
+    @property
+    def when(self):
+        """Test start from the file name stamp (month-day-year as written)."""
+        from datetime import datetime
+
+        m = re.match(r"(\d{2})-(\d{2})-(\d{2})_?(\d{2})\.(\d{2})", self.stamp)
+        mo, d, y, hh, mm = map(int, m.groups())
+        return datetime(2000 + y, mo, d, hh, mm)
 
     @property
     def kind(self) -> str:
@@ -140,24 +173,41 @@ def _find_h5_group(group):
     return None
 
 
+def first_sustained_segment(time, current, min_duration_s=60.0, min_current_a=0.02):
+    """Return (start, end, sign) of the first run of same-sign current lasting at
+    least ``min_duration_s``, or None."""
+    s = np.sign(np.where(np.abs(current) > min_current_a, current, 0.0))
+    edges = np.flatnonzero(np.diff(s)) + 1
+    starts = np.r_[0, edges]
+    ends = np.r_[edges - 1, len(s) - 1]
+    for a, b in zip(starts, ends):
+        if s[a] != 0 and time[b] - time[a] >= min_duration_s:
+            return int(a), int(b), int(s[a])
+    return None
+
+
 def detect_discharge_sign(files) -> int:
     """Return +1 if the raw data reports discharge as positive current, -1 if negative.
 
-    Uses tests named as discharges (C/20, 0.5C, 1C, 2C): the dominant sign of
-    current while it flows must agree across every such file.
+    Uses tests named as discharges (C/20, 0.5C, 1C, 2C). Some of these files also
+    contain a recharge after the discharge, so the sign is taken from the FIRST
+    sustained current segment, and that segment must lower the voltage by at
+    least 0.3 V (a physical check that it really is the discharge). The sign must
+    agree across every such file.
     """
     signs = []
     for tf in files:
         if tf.test not in KNOWN_DISCHARGE:
             continue
-        cur = read_mat(tf.path)["Current"]
-        flowing = cur[np.abs(cur) > 0.05 * np.max(np.abs(cur))]
-        if flowing.size == 0:
+        c = read_mat(tf.path)
+        seg = first_sustained_segment(c["Time"], c["Current"])
+        if seg is None:
             continue
-        frac_pos = np.mean(flowing > 0)
-        if 0.1 < frac_pos < 0.9:
-            raise ValueError(f"{tf.path.name}: mixed current sign in a discharge test ({frac_pos:.2f} positive)")
-        signs.append(1 if frac_pos >= 0.9 else -1)
+        i0, i1, sign = seg
+        dv = c["Voltage"][i1] - c["Voltage"][i0]
+        if dv > -0.3:
+            raise ValueError(f"{tf.path.name}: first sustained segment does not discharge the cell (dV={dv:+.3f} V)")
+        signs.append(sign)
     if not signs:
         raise ValueError("no discharge tests found to detect the current sign")
     if len(set(signs)) != 1:
@@ -190,3 +240,67 @@ def list_files(raw_dir) -> list[TestFile]:
         for p in sorted((raw_dir / folder).glob("*.mat")):
             out.append(parse_name(p))
     return out
+
+
+def repair_time(df: pd.DataFrame):
+    """Make time strictly usable: drop NaN rows, and if the time column jumps
+    backwards (logging restarts), keep only the part after the last restart.
+
+    Returns (df, note). The tester Ah counter keeps running through restarts, so
+    the reference SoC remains continuous; it is computed from the Ah column.
+    """
+    notes = []
+    n_nan = int(df[["voltage_v", "current_a", "temp_degc"]].isna().any(axis=1).sum())
+    if n_nan:
+        df = df.dropna(subset=["voltage_v", "current_a", "temp_degc"])
+        notes.append(f"dropped {n_nan} NaN rows")
+    t = df["time_s"].to_numpy()
+    back = np.flatnonzero(np.diff(t) < 0)
+    if back.size:
+        # Keep the longest run with no backward step and no gap above max_gap_s.
+        # Only applied to files with restarts: HPPC rests are normally logged at 10 s.
+        max_gap_s = 5.0
+        breaks = np.flatnonzero((np.diff(t) < 0) | (np.diff(t) > max_gap_s)) + 1
+        starts, ends = np.r_[0, breaks], np.r_[breaks, len(t)]
+        j = int(np.argmax(ends - starts))
+        a, b = starts[j], ends[j]
+        notes.append(f"{back.size} time resets; kept longest contiguous run, raw t = {t[a]:.1f} to {t[b - 1]:.1f} s "
+                     f"({b - a} of {len(t)} rows)")
+        df = df.iloc[a:b]
+    # Duplicate time stamps (about 5.7k rows over 177 files) would give zero-length
+    # steps; keep the first row of each duplicate group. Applied to every file.
+    df = df.drop_duplicates(subset="time_s", keep="first").reset_index(drop=True)
+    return df, "; ".join(notes)
+
+
+def c20_capacity(df: pd.DataFrame) -> dict:
+    """Capacity from a C/20 test file (processed frame, i > 0 discharge).
+
+    Discharge capacity: tester Ah counter change over the first sustained discharge
+    segment. Charge capacity: change over the following sustained charge segment.
+    """
+    t, i, ah = df["time_s"].to_numpy(), df["current_a"].to_numpy(), df["ah"].to_numpy()
+    seg = first_sustained_segment(t, i)
+    if seg is None or seg[2] != 1:
+        raise ValueError("C/20 file does not start with a discharge segment")
+    a, b, _ = seg
+    out = {"c20_discharge_ah": float(ah[b] - ah[a])}
+    rest = first_sustained_segment(t[b + 1:], i[b + 1:])
+    if rest is not None and rest[2] == -1:
+        c, d = rest[0] + b + 1, rest[1] + b + 1
+        out["c20_charge_ah"] = float(ah[c] - ah[d])
+    return out
+
+
+def add_soc_ref(df: pd.DataFrame, capacity_ah: float, ah_origin: float | None = None, soc0: float = 1.0) -> pd.DataFrame:
+    """Reference SoC from the tester Ah counter (positive = discharged):
+    soc_ref = soc0 - (Ah(t) - ah_origin) / capacity.
+
+    ah_origin is the counter value at the start of the test. Pass the value from
+    BEFORE any repair, so a file trimmed by repair_time keeps the charge removed
+    before the kept segment (the counter runs through logging restarts).
+    """
+    df = df.copy()
+    origin = df["ah"].iloc[0] if ah_origin is None else ah_origin
+    df["soc_ref"] = soc0 - (df["ah"] - origin) / capacity_ah
+    return df
