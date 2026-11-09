@@ -1,0 +1,62 @@
+"""Small sequence-to-one SoC estimators sized for a Raspberry Pi.
+
+Input:  (batch, window, 3) normalised [V, I, T]
+Output: (batch,) SoC estimate at the last step of the window
+"""
+
+from __future__ import annotations
+
+import math
+
+import torch
+from torch import nn
+
+
+class SoCTransformer(nn.Module):
+    """Transformer encoder (Vaswani et al., NeurIPS 2017) with pre-layer norm,
+    fixed sinusoidal positions, and a linear head on the final token."""
+
+    def __init__(self, n_in=3, d_model=32, n_heads=4, n_layers=2, d_ff=64, window=300, dropout=0.1):
+        super().__init__()
+        self.inp = nn.Linear(n_in, d_model)
+        pe = torch.zeros(window, d_model)
+        pos = torch.arange(window).unsqueeze(1)
+        div = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(pos * div)
+        pe[:, 1::2] = torch.cos(pos * div)
+        self.register_buffer("pe", pe, persistent=False)
+        layer = nn.TransformerEncoderLayer(
+            d_model, n_heads, d_ff, dropout, batch_first=True, norm_first=True
+        )
+        self.encoder = nn.TransformerEncoder(layer, n_layers, enable_nested_tensor=False)
+        self.norm = nn.LayerNorm(d_model)
+        self.head = nn.Linear(d_model, 1)
+
+    def forward(self, x):
+        h = self.inp(x) + self.pe[: x.shape[1]]
+        h = self.encoder(h)
+        return self.head(self.norm(h[:, -1])).squeeze(-1)
+
+
+class SoCLSTM(nn.Module):
+    """Single-layer LSTM baseline (cf. Chemali et al., IEEE TIE 2018)."""
+
+    def __init__(self, n_in=3, hidden=32, n_layers=1):
+        super().__init__()
+        self.lstm = nn.LSTM(n_in, hidden, n_layers, batch_first=True)
+        self.head = nn.Linear(hidden, 1)
+
+    def forward(self, x):
+        out, _ = self.lstm(x)
+        return self.head(out[:, -1]).squeeze(-1)
+
+
+MODELS = {"transformer": SoCTransformer, "lstm": SoCLSTM}
+
+
+def build_model(name: str, **kwargs) -> nn.Module:
+    return MODELS[name](**kwargs)
+
+
+def n_params(model: nn.Module) -> int:
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)

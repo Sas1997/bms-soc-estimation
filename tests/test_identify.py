@@ -1,0 +1,81 @@
+import numpy as np
+
+from socest.ecm import ECMParams, TheveninModel
+from socest.identify import fit_segment, rc_voltages
+from socest.params import ParamTable
+
+from conftest import CAPACITY_AH, PARAMS_2RC
+
+
+def hppc_like_segment(dt=0.1):
+    """10 s rest, 10 s 1C discharge, 40 s rest, 10 s 0.75C charge, 300 s rest."""
+    blocks = [(10, 0.0), (10, 3.0), (40, 0.0), (10, -2.25), (300, 0.0)]
+    current = np.concatenate([np.full(int(d / dt), a) for d, a in blocks])
+    time = np.arange(current.size) * dt
+    return time, current
+
+
+def test_rc_voltages_uniform_and_variable_dt_agree():
+    i = np.r_[np.zeros(5), np.full(50, 2.0), np.zeros(50)]
+    dt_u = np.full(i.size, 0.5)
+    dt_v = dt_u.copy()
+    dt_v[-1] = 0.50000001  # forces the explicit loop
+    np.testing.assert_allclose(rc_voltages(i, dt_u, 0.01, 7.0), rc_voltages(i, dt_v, 0.01, 7.0), atol=1e-12)
+
+
+def test_fit_recovers_known_2rc_parameters(ocv):
+    model = TheveninModel(ocv, PARAMS_2RC, CAPACITY_AH)
+    t, i = hppc_like_segment()
+    v, _ = model.simulate(i, 0.1, 25.0, soc0=0.6)
+    fit = fit_segment(t, i, v, 0.6, CAPACITY_AH, ocv, 25.0, n_rc=2)
+    p = fit.params
+    assert fit.success and fit.rmse_v < 1e-4
+    np.testing.assert_allclose(p.r0, PARAMS_2RC.r0, rtol=0.02)
+    np.testing.assert_allclose(p.r, PARAMS_2RC.r, rtol=0.05)
+    np.testing.assert_allclose(p.tau, PARAMS_2RC.tau, rtol=0.05)
+
+
+def test_fit_robust_to_noise_and_ocv_offset(ocv):
+    model = TheveninModel(ocv, PARAMS_2RC, CAPACITY_AH)
+    t, i = hppc_like_segment()
+    v, _ = model.simulate(i, 0.1, 25.0, soc0=0.4)
+    rng = np.random.default_rng(3)
+    v_meas = v + 0.008 + rng.normal(0, 0.001, v.size)  # 8 mV hysteresis-like offset + noise
+    fit = fit_segment(t, i, v_meas, 0.4, CAPACITY_AH, ocv, 25.0, n_rc=2)
+    assert fit.rmse_v < 0.0015
+    np.testing.assert_allclose(fit.params.r0, PARAMS_2RC.r0, rtol=0.05)
+
+
+def test_1rc_fits_worse_than_2rc_on_2rc_data(ocv):
+    model = TheveninModel(ocv, PARAMS_2RC, CAPACITY_AH)
+    t, i = hppc_like_segment()
+    v, _ = model.simulate(i, 0.1, 25.0, soc0=0.6)
+    f1 = fit_segment(t, i, v, 0.6, CAPACITY_AH, ocv, 25.0, n_rc=1)
+    f2 = fit_segment(t, i, v, 0.6, CAPACITY_AH, ocv, 25.0, n_rc=2)
+    assert f2.rmse_v < f1.rmse_v
+
+
+def test_param_table_interpolation(tmp_path):
+    temps, socs = [0.0, 25.0], [0.2, 0.8]
+    r0 = [[0.04, 0.03], [0.02, 0.01]]
+    r = [[[0.02, 0.02], [0.01, 0.01]]]
+    tau = [[[10.0, 10.0], [40.0, 40.0]]]
+    tab = ParamTable(temps, socs, r0, r, tau)
+    p = tab(0.5, 12.5)
+    np.testing.assert_allclose(p.r0, 0.025)
+    np.testing.assert_allclose(p.r[0], 0.015)
+    np.testing.assert_allclose(p.tau[0], 20.0)  # geometric mean in log space
+    np.testing.assert_allclose(tab(0.0, -40.0).r0, 0.04)  # clamped
+    tab.to_json(tmp_path / "p.json")
+    p2 = ParamTable.from_json(tmp_path / "p.json")(0.5, 12.5)
+    assert p2 == p
+
+
+def test_param_table_drives_model(ocv):
+    tab = ParamTable([25.0], [0.0, 1.0], [[0.02, 0.02]], [[[0.01, 0.01]], [[0.015, 0.015]]],
+                     [[[10.0, 10.0]], [[200.0, 200.0]]])
+    m_tab = TheveninModel(ocv, tab, CAPACITY_AH)
+    m_const = TheveninModel(ocv, PARAMS_2RC, CAPACITY_AH)
+    i = np.full(100, 2.0)
+    np.testing.assert_allclose(m_tab.simulate(i, 1.0, 25.0, 0.5)[0], m_const.simulate(i, 1.0, 25.0, 0.5)[0])
+    assert isinstance(tab(0.5, 25.0), ECMParams)
