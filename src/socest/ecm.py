@@ -11,6 +11,21 @@ Continuous-time model (Plett, Battery Management Systems Vol. 1, 2015, ch. 2):
 Discretised with a zero-order hold on current, which is exact for piecewise
 constant current:
     v_i[k+1] = a_i * v_i[k] + R_i * (1 - a_i) * i[k],   a_i = exp(-dt / tau_i)
+
+Optional charge-transfer term. At low temperature the pulse resistance of the
+cell falls with current (see results/tables/m2_cold_diagnostics.md). This is
+modelled with the Butler-Volmer equation for symmetric transfer coefficients
+(Bard and Faulkner, Electrochemical Methods, 2nd ed., 2001, ch. 3), inverted
+for the overpotential and treated as instantaneous:
+    eta(i, T) = n * (2 R T / F) * asinh(i / (2 i0)),   T in kelvin
+    v_terminal = OCV - sum(v_i) - R0 * i - eta(i, T)
+i0 (A) is a lumped exchange current; i0 = inf switches the term off. n is the
+number of charge-transfer interfaces in series. n = 1 is used: on the HPPC
+pulses n = 2 fitted no better (16.6 vs 17.0 mV pooled RMSE at -20 degC).
+
+Finding (results/tables/m2_ecm_selection.md): the term improves the pulse fits
+in the cold but does not improve drive-cycle voltage prediction once the slow
+branch is calibrated, so the selected model does not use it.
 """
 
 from __future__ import annotations
@@ -30,11 +45,15 @@ class ECMParams:
     r0  : series resistance, ohm
     r   : RC branch resistances, ohm
     tau : RC branch time constants, s
+    i0  : lumped exchange current of the Butler-Volmer term, A (inf = off)
+    bv_n: number of series charge-transfer interfaces in the Butler-Volmer term
     """
 
     r0: float
     r: Sequence[float]
     tau: Sequence[float]
+    i0: float = float("inf")
+    bv_n: int = 1
 
     def __post_init__(self):
         if len(self.r) != len(self.tau):
@@ -43,6 +62,18 @@ class ECMParams:
     @property
     def n_rc(self) -> int:
         return len(self.r)
+
+
+GAS_R = 8.314462618  # J / (mol K)
+FARADAY = 96485.33212  # C / mol
+
+
+def bv_overpotential(i, temp_c, i0, n=1):
+    """Butler-Volmer overpotential (V) for current i (A), temperature (degC),
+    exchange current i0 (A) and n series interfaces."""
+    if not np.isfinite(i0):
+        return 0.0 * np.asarray(i, dtype=float) if np.ndim(i) else 0.0
+    return n * 2.0 * GAS_R * (np.asarray(temp_c, dtype=float) + 273.15) / FARADAY * np.arcsinh(np.asarray(i) / (2.0 * i0))
 
 
 # A parameter provider returns ECMParams for a given (soc, temp) operating point.
@@ -96,7 +127,7 @@ class TheveninModel:
     def output(self, x: np.ndarray, i: float, temp: float):
         """Return (v_terminal, H) where H = d v_terminal / d x."""
         p = self.params(float(x[0]), temp)
-        v = float(self.ocv(x[0], temp)) - float(np.sum(x[1:])) - p.r0 * i
+        v = float(self.ocv(x[0], temp)) - float(np.sum(x[1:])) - p.r0 * i - float(bv_overpotential(i, temp, p.i0, p.bv_n))
         H = np.empty(self.n_states)
         H[0] = float(self.ocv.dsoc(x[0], temp))
         H[1:] = -1.0

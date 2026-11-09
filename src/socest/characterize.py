@@ -25,7 +25,7 @@ import numpy as np
 import pandas as pd
 
 from .datasets.lg_hg2 import first_sustained_segment
-from .identify import SegmentFit, fit_segment
+from .identify import SegmentFit, SlowFit, fit_segment, fit_slow_branch
 from .ocv import OCVCurve
 
 SOC_GRID = np.linspace(0.0, 1.0, 201)
@@ -88,16 +88,24 @@ def ocv_from_c20(df: pd.DataFrame, cv_limit_v: float = 4.199):
     }
 
 
-def hppc_blocks(df: pd.DataFrame, long_rest_s: float = 1800.0):
-    """Index ranges (a, b) of each pulse block: from 10 s before the first pulse
-    after a long rest, to the start of the next long (>60 s) current segment."""
+def hppc_levels(df: pd.DataFrame, long_rest_s: float = 1800.0):
+    """Structure of the HPPC test, one dict per SoC level:
+
+        pulses : (a, b)  from 10 s before the first pulse to the start of the
+                         next sustained (>60 s) current segment
+        relax  : (a, b)  or None. From the last rest sample before the sustained
+                         discharge step that brought the cell to this level,
+                         through the long rest, to the last sample before the
+                         first pulse.
+                         None for the first level (the test opens fully charged).
+    """
     t, i = df["time_s"].to_numpy(), df["current_a"].to_numpy()
     active = np.abs(i) > 0.05
-    blocks = []
+    levels = []
+    pending_step = None
     k = 0
     n = len(t)
     while k < n:
-        # find the start of a long rest
         if active[k]:
             k += 1
             continue
@@ -107,18 +115,26 @@ def hppc_blocks(df: pd.DataFrame, long_rest_s: float = 1800.0):
         if j >= n:
             break
         # The file itself opens at rest after a full charge, so a rest at k == 0
-        # counts as a block start whatever its length.
+        # counts as a level whatever its length.
         if t[j] - t[k] >= long_rest_s or k == 0:
             start = int(np.searchsorted(t, t[j] - 10.0))
-            # block ends where the next sustained (>60 s) current segment begins
             seg = first_sustained_segment(t[j:], i[j:], min_duration_s=60.0, min_current_a=0.05)
             end = j + seg[0] if seg is not None else n - 1
             if end - start > 100:
-                blocks.append((start, end))
+                relax = None
+                if pending_step is not None:
+                    relax = (pending_step - 1, j - 1)   # starts on the last rest sample before the step
+                levels.append({"pulses": (start, end), "relax": relax})
+            pending_step = j + seg[0] if seg is not None else None
             k = end if end > j else j + 1
         else:
             k = j
-    return blocks
+    return levels
+
+
+def hppc_blocks(df: pd.DataFrame, long_rest_s: float = 1800.0):
+    """Index ranges (a, b) of each pulse block (see hppc_levels)."""
+    return [lv["pulses"] for lv in hppc_levels(df, long_rest_s)]
 
 
 def truncate_to_pairs(df: pd.DataFrame, a: int, b: int, max_pairs: int) -> int:
@@ -140,11 +156,11 @@ def truncate_to_pairs(df: pd.DataFrame, a: int, b: int, max_pairs: int) -> int:
 
 
 def identify_hppc(df: pd.DataFrame, ocv: OCVCurve, capacity_ah: float, temp: float, n_rc: int,
-                  max_pairs: int | None = None):
+                  max_pairs: int | None = None, i0: float = float("inf"), bv_n: int = 1):
     """Fit one n-RC model per HPPC block. SoC from the tester Ah counter, starting at 1.
 
     max_pairs limits each block to its first pulse pairs (1C and 2C discharge
-    for max_pairs = 2 in this protocol).
+    for max_pairs = 2 in this protocol). i0 fixes the Butler-Volmer term.
     """
     fits: list[SegmentFit] = []
     ah = df["ah"].to_numpy()
@@ -154,5 +170,25 @@ def identify_hppc(df: pd.DataFrame, ocv: OCVCurve, capacity_ah: float, temp: flo
         soc0 = 1.0 - (ah[a] - ah[0]) / capacity_ah
         seg = df.iloc[a : b + 1]
         fits.append(fit_segment(seg["time_s"].to_numpy(), seg["current_a"].to_numpy(),
-                                seg["voltage_v"].to_numpy(), soc0, capacity_ah, ocv, temp, n_rc=n_rc))
+                                seg["voltage_v"].to_numpy(), soc0, capacity_ah, ocv, temp, n_rc=n_rc, i0=i0, bv_n=bv_n))
     return fits
+
+
+def identify_slow(df: pd.DataFrame, ocv: OCVCurve, capacity_ah: float, temp: float, fast_fits):
+    """Slow branch per SoC level from the step + 1 h rest before each pulse block.
+
+    fast_fits: the SegmentFit list from identify_hppc (same level order). Returns
+    a list aligned with the levels; None where a level has no preceding step.
+    """
+    ah = df["ah"].to_numpy()
+    out: list[SlowFit | None] = []
+    for lv, fast in zip(hppc_levels(df), fast_fits):
+        if lv["relax"] is None:
+            out.append(None)
+            continue
+        a, b = lv["relax"]
+        seg = df.iloc[a : b + 1]
+        soc = 1.0 - (ah[a : b + 1] - ah[0]) / capacity_ah
+        out.append(fit_slow_branch(seg["time_s"].to_numpy(), seg["current_a"].to_numpy(),
+                                   seg["voltage_v"].to_numpy(), soc, ocv, temp, fast.params))
+    return out

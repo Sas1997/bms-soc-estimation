@@ -1,20 +1,24 @@
-"""Choose the ECM identification variant using TRAINING and VALIDATION drive cycles only.
+"""Score the cell model variants on drive cycles and select one on the VALIDATION cycles.
 
-Variants (all fitted on HPPC, never on drive cycles):
-  A  all four pulse pairs, all SoC levels
-  B  all four pulse pairs, SoC levels >= 0.15 (table held flat below)
-  C  first two pulse pairs only (1C and 2C discharge), SoC levels >= 0.15
+Variants come from experiments/m2_characterize.py (C/20 and HPPC only) and
+experiments/m2_calibrate_slow.py (slow branch calibrated on the training drive
+cycles). Each one predicts terminal voltage open loop (from current and
+temperature, starting at SoC = 1) at 1 Hz.
 
-Then, with the best variant, OCV definitions (see socest.characterize):
-  average, discharge (raw C/20 discharge branch), discharge+IR
+Selection uses the validation cycles only (Mixed7 and Mixed8), which no variant
+was fitted on. Score: voltage RMSE per cycle, median per temperature, then the
+mean over the four temperatures that have validation cycles (40 degC has none,
+see data/DATA_CARD.md). Training-cycle results are reported for reference.
+Test cycles and all 10 degC data are not touched.
 
-Score: median open-loop voltage RMSE over train + val cycles at the five
-non-held-out temperatures, 1 Hz. Test cycles are not touched here.
-Writes results/tables/m2_ecm_selection.md.
+Writes results/characterization/selected.json, results/tables/m2_ecm_selection.md
+and results/m2_ecm_selection.csv.
+Run: python experiments/m2_select_ecm.py
 """
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -23,80 +27,61 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
-sys.path.insert(0, str(ROOT / "experiments"))
 
-import m2_characterize as m2  # noqa: E402
-from socest.cell import PROC, capacity_fn, load_ocv  # noqa: E402
-from socest.ecm import TheveninModel  # noqa: E402
-from socest.resample import to_uniform  # noqa: E402
-from socest.split import HELD_OUT_FOLDER, load_index  # noqa: E402
+from socest.cell import CHAR, capacity_fn, load_model, variants  # noqa: E402
+from socest.cycles import load_split  # noqa: E402
+from socest.thermal import effective_temperature  # noqa: E402
 
-VARIANTS = {"A": dict(max_pairs=None, min_soc=0.0), "B": dict(max_pairs=None, min_soc=0.15),
-            "C": dict(max_pairs=2, min_soc=0.15)}
+ORDER = ["n20degC", "n10degC", "0degC", "25degC", "40degC"]
 
 
 def main():
-    cap = pd.read_csv(PROC / "capacity.csv", index_col=0)
-    curves, _ = m2.build_ocv(cap)
-    ocv = load_ocv()
     cap_of = capacity_fn()
-    folders = [f for f in m2.FOLDERS if f != HELD_OUT_FOLDER]
-    ix = load_index(PROC)
-    sel = ix[ix.split.isin(["train", "val"])]
-    data = [(r, to_uniform(pd.read_parquet(PROC / r.parquet), 1.0)) for _, r in sel.iterrows()]
-
-    fits_cache, rows = {}, []
-    for name, cfg in VARIANTS.items():
-        key = cfg["max_pairs"]
-        if key not in fits_cache:
-            fits_cache[key] = m2.fit_all(curves, cap, max_pairs=key, verbose=False)
-        fits = fits_cache[key]
-        for n_rc in (1, 2):
-            table = m2.param_table(fits, n_rc, folders, min_soc=cfg["min_soc"])
-            for r, u in data:
-                i, v, T = u.current_a.to_numpy(), u.voltage_v.to_numpy(), u.temp_degc.to_numpy()
-                m = TheveninModel(ocv, table, cap_of(T[0]))
-                vs, _ = m.simulate(i, 1.0, T, soc0=1.0)
-                rows.append({"variant": name, "n_rc": n_rc, "folder": r.folder, "test": r.test,
-                             "v_rmse_mv": 1000 * np.sqrt(np.mean((vs - v) ** 2))})
-            print(f"variant {name} {n_rc}RC done", flush=True)
-    res = pd.DataFrame(rows)
-    res.to_csv(ROOT / "results" / "m2_ecm_selection.csv", index=False)
-    by_t = res.pivot_table(index=["variant", "n_rc"], columns="folder", values="v_rmse_mv", aggfunc="median")
-    by_t = by_t[[f for f in m2.FOLDERS if f in by_t.columns]]
-    by_t["overall median"] = res.groupby(["variant", "n_rc"]).v_rmse_mv.median()
-    # OCV definitions, with variant B 2RC (best overall above)
-    from socest.ocv import OCVCurve
-    from socest.datasets.lg_hg2 import FOLDER_TEMPS
-    tab = m2.param_table(fits_cache[None], 2, folders, min_soc=0.15)
-    soc = curves[folders[0]]["soc"]
-    defs = {"average": [curves[f]["ocv"] for f in folders],
-            "discharge": [np.maximum.accumulate(curves[f]["v_dis"]) for f in folders],
-            "discharge+IR": [m2.ocv_discharge_ir(curves, tab, f) for f in folders]}
-    orows = []
-    for name, rows_ in defs.items():
-        o = OCVCurve(soc, np.vstack(rows_), temps=[FOLDER_TEMPS[f] for f in folders])
+    data = load_split("train", "val")
+    rows = []
+    for name in variants():
         for r, u in data:
             i, v, T = u.current_a.to_numpy(), u.voltage_v.to_numpy(), u.temp_degc.to_numpy()
-            vs, _ = TheveninModel(o, tab, cap_of(T[0])).simulate(i, 1.0, T, soc0=1.0)
+            m = load_model(name, capacity_ah=cap_of(T[0]))
+            vs, _ = m.simulate(i, 1.0, effective_temperature(T, m.thermal_gain), soc0=1.0)
             e = 1000 * (vs - v)
-            orows.append({"ocv": name, "folder": r.folder, "v_rmse_mv": np.sqrt(np.mean(e**2)), "bias_mv": e.mean()})
-        print(f"OCV {name} done", flush=True)
-    ores = pd.DataFrame(orows)
-    o_t = ores.pivot_table(index="ocv", columns="folder", values="v_rmse_mv", aggfunc="median")
-    o_t = o_t[[f for f in m2.FOLDERS if f in o_t.columns]]
-    o_t["overall median"] = ores.groupby("ocv").v_rmse_mv.median()
-    o_b = ores.pivot_table(index="ocv", columns="folder", values="bias_mv", aggfunc="median")
-    o_b = o_b[[f for f in m2.FOLDERS if f in o_b.columns]]
+            rows.append({"variant": name, "split": r.split, "folder": r.folder, "test": r.test,
+                         "v_rmse_mv": np.sqrt(np.mean(e**2)), "bias_mv": e.mean()})
+        print(f"{name} done", flush=True)
+    res = pd.DataFrame(rows)
+    res.to_csv(ROOT / "results" / "m2_ecm_selection.csv", index=False)
 
-    md = ["# ECM variant selection (train + val drive cycles only, open-loop voltage RMSE, mV, median)", "",
-          __doc__.split("Then,")[0].split("Variants")[1].strip(), "", by_t.round(1).to_markdown(), "",
-          "# OCV definition (variant B, 2RC)", "", "Median voltage RMSE (mV):", "", o_t.round(1).to_markdown(), "",
-          "Median bias, model minus measured (mV):", "", o_b.round(1).to_markdown(), "",
-          "Selected: variant B, 2RC, OCV = discharge+IR (lowest overall median RMSE).", ""]
+    names = list(variants())
+
+    def table(split, col="v_rmse_mv"):
+        t = res[res.split == split].pivot_table(index="variant", columns="folder", values=col, aggfunc="median")
+        return t.reindex(index=names, columns=[f for f in ORDER if f in t.columns])
+
+    val, train, bias = table("val"), table("train"), table("val", "bias_mv")
+    val["score"] = val.mean(axis=1)
+    train["mean"] = train.mean(axis=1)
+    best = val["score"].idxmin()
+    (CHAR / "selected.json").write_text(json.dumps(
+        {"variant": best, "criterion": "mean over temperatures of the median open-loop voltage RMSE on validation drive cycles",
+         "score_mv": round(float(val.loc[best, "score"]), 2)}, indent=1))
+
+    desc = pd.Series({n: v["description"] for n, v in variants().items()}, name="model")
+    md = ["# Cell model selection", "",
+          "Open-loop voltage prediction at 1 Hz, median voltage RMSE per temperature (mV). "
+          "No test cycle and no 10 °C data are used.", "",
+          "## Validation cycles (Mixed7, Mixed8): used for selection", "",
+          "Score = mean of the temperature columns. 40 °C has no validation cycles.", "",
+          val.round(1).join(desc).to_markdown(), "",
+          "Median bias on the validation cycles, model minus measured (mV):", "", bias.round(1).to_markdown(), "",
+          "## Training cycles (Mixed1 to Mixed6): reference only", "",
+          "Variants ending in `_dc` had their slow branch calibrated on these cycles.", "",
+          train.round(1).to_markdown(), "",
+          f"Selected: `{best}` ({desc[best]}).", ""]
     (ROOT / "results" / "tables" / "m2_ecm_selection.md").write_text("\n".join(md))
-    print(by_t.round(1).to_string())
-    print(o_t.round(1).to_string())
+    print("VAL\n" + val.round(1).to_string())
+    print("VAL bias\n" + bias.round(1).to_string())
+    print("TRAIN\n" + train.round(1).to_string())
+    print("selected:", best)
 
 
 if __name__ == "__main__":

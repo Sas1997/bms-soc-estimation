@@ -14,13 +14,24 @@ from torch import nn
 
 class SoCTransformer(nn.Module):
     """Transformer encoder (Vaswani et al., NeurIPS 2017) with pre-layer norm,
-    fixed sinusoidal positions, and a linear head on the final token."""
+    fixed sinusoidal positions, and a linear head on the final token.
 
-    def __init__(self, n_in=3, d_model=32, n_heads=4, n_layers=2, d_ff=64, window=300, dropout=0.1):
+    The input is split into non-overlapping patches of ``patch`` samples, each
+    embedded by one linear map (a strided convolution), as in PatchTST (Nie et
+    al., ICLR 2023). With patch = 5 a 300-sample window becomes 60 tokens, which
+    cuts attention cost by 25x compared with one token per sample and keeps
+    inference light enough for a Raspberry Pi. patch = 1 gives one token per sample.
+    """
+
+    def __init__(self, n_in=3, d_model=32, n_heads=4, n_layers=2, d_ff=64, window=300, dropout=0.1, patch=5):
         super().__init__()
-        self.inp = nn.Linear(n_in, d_model)
-        pe = torch.zeros(window, d_model)
-        pos = torch.arange(window).unsqueeze(1)
+        if window % patch:
+            raise ValueError("window must be a multiple of patch")
+        self.patch = patch
+        self.inp = nn.Conv1d(n_in, d_model, kernel_size=patch, stride=patch)
+        n_tok = window // patch
+        pe = torch.zeros(n_tok, d_model)
+        pos = torch.arange(n_tok).unsqueeze(1)
         div = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
         pe[:, 0::2] = torch.sin(pos * div)
         pe[:, 1::2] = torch.cos(pos * div)
@@ -33,7 +44,8 @@ class SoCTransformer(nn.Module):
         self.head = nn.Linear(d_model, 1)
 
     def forward(self, x):
-        h = self.inp(x) + self.pe[: x.shape[1]]
+        h = self.inp(x.transpose(1, 2)).transpose(1, 2)
+        h = h + self.pe[: h.shape[1]]
         h = self.encoder(h)
         return self.head(self.norm(h[:, -1])).squeeze(-1)
 

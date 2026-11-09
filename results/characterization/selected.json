@@ -1,0 +1,5 @@
+{
+ "variant": "3rc_dc_dis",
+ "criterion": "mean over temperatures of the median open-loop voltage RMSE on validation drive cycles",
+ "score_mv": 31.21
+}

@@ -1,8 +1,8 @@
-"""Load the identified LG HG2 cell model (outputs of experiments/m2_characterize.py).
+"""Load an identified LG HG2 cell model (outputs of experiments/m2_characterize.py).
 
-The model never uses 10 degC data: OCV, parameters and capacity are interpolated
-across the other five temperatures, so the 10 degC test set is unseen for the
-physics-based estimator, just as for the ML model.
+No model uses 10 degC data: OCV, parameters and capacity are interpolated across
+the other five temperatures, so the 10 degC test set is unseen for the
+physics-based estimators, just as for the ML models.
 """
 
 from __future__ import annotations
@@ -24,8 +24,17 @@ CHAR = ROOT / "results" / "characterization"
 PROC = ROOT / "data" / "processed" / "LG_HG2"
 
 
-def load_ocv(exclude=(HELD_OUT_FOLDER,)) -> OCVCurve:
-    d = json.loads((CHAR / "ocv.json").read_text())
+def variants() -> dict:
+    return json.loads((CHAR / "variants.json").read_text())
+
+
+def selected_variant() -> str:
+    """Variant chosen on training and validation drive cycles (experiments/m2_select_ecm.py)."""
+    return json.loads((CHAR / "selected.json").read_text())["variant"]
+
+
+def load_ocv(file: str, exclude=(HELD_OUT_FOLDER,)) -> OCVCurve:
+    d = json.loads((CHAR / file).read_text())
     keep = [k for k, f in enumerate(d["folders"]) if f not in exclude]
     return OCVCurve(d["soc"], np.array(d["ocv"])[keep], temps=np.array(d["temps"])[keep])
 
@@ -40,7 +49,15 @@ def capacity_fn(exclude=(HELD_OUT_FOLDER,)):
     return lambda T: float(np.interp(T, temps[o], vals))
 
 
-def load_model(n_rc: int = 2, capacity_ah: float | None = None, temp_for_capacity: float = 25.0) -> TheveninModel:
-    params = ParamTable.from_json(CHAR / f"params_{n_rc}rc.json")
+def load_model(variant: str | None = None, capacity_ah: float | None = None, temp_for_capacity: float = 25.0) -> TheveninModel:
+    """Build the model for a variant name from variants.json (default: the selected one).
+
+    Callers pass the model the effective temperature:
+        T_eff = effective_temperature(T_measured, model.thermal_gain)
+    """
+    v = variants()[variant or selected_variant()]
     cap = capacity_ah if capacity_ah is not None else capacity_fn()(temp_for_capacity)
-    return TheveninModel(load_ocv(), params, cap)
+    model = TheveninModel(load_ocv(v["ocv"]), ParamTable.from_json(CHAR / v["params"]), cap)
+    # Parameters are looked up at socest.thermal.effective_temperature(T, model.thermal_gain).
+    model.thermal_gain = float(v.get("thermal_gain", 0.0))
+    return model

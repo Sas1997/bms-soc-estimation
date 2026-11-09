@@ -83,3 +83,37 @@ def test_one_rc_model_is_supported(ocv):
 def test_invalid_params_rejected():
     with pytest.raises(ValueError):
         ECMParams(r0=0.01, r=(0.01, 0.02), tau=(10.0,))
+
+
+def test_butler_volmer_term():
+    from socest.ecm import FARADAY, GAS_R, bv_overpotential
+
+    assert bv_overpotential(2.0, 25.0, float("inf")) == 0.0
+    assert bv_overpotential(0.0, -20.0, 0.2) == 0.0
+    # odd in current, and linear with slope R T / (F i0) for small currents
+    np.testing.assert_allclose(bv_overpotential(-1.5, -20.0, 0.2), -bv_overpotential(1.5, -20.0, 0.2))
+    small = 1e-4
+    np.testing.assert_allclose(bv_overpotential(small, 0.0, 0.5) / small, GAS_R * 273.15 / (FARADAY * 0.5), rtol=1e-6)
+    # resistance falls with current
+    assert bv_overpotential(6.0, -20.0, 0.2) / 6.0 < bv_overpotential(0.75, -20.0, 0.2) / 0.75
+
+
+def test_model_output_includes_butler_volmer(ocv):
+    from socest.ecm import bv_overpotential
+
+    lin = TheveninModel(ocv, ECMParams(0.02, (0.01,), (30.0,)), CAPACITY_AH)
+    bv = TheveninModel(ocv, ECMParams(0.02, (0.01,), (30.0,), i0=0.3), CAPACITY_AH)
+    x = np.array([0.5, 0.004])
+    np.testing.assert_allclose(lin.output(x, 2.0, -10.0)[0] - bv.output(x, 2.0, -10.0)[0],
+                               bv_overpotential(2.0, -10.0, 0.3))
+    np.testing.assert_allclose(lin.output(x, 2.0, -10.0)[1], bv.output(x, 2.0, -10.0)[1])  # same Jacobian
+
+
+def test_effective_temperature():
+    from socest.thermal import effective_temperature
+
+    T = np.r_[np.full(40, -20.0), np.full(10, -16.0)]
+    np.testing.assert_allclose(effective_temperature(T, 0.0), T)
+    Te = effective_temperature(T, 1.0)
+    np.testing.assert_allclose(Te[:40], -20.0)
+    np.testing.assert_allclose(Te[40:], -12.0)

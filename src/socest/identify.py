@@ -18,7 +18,7 @@ import numpy as np
 from scipy.optimize import least_squares
 from scipy.signal import lfilter
 
-from .ecm import ECMParams
+from .ecm import ECMParams, bv_overpotential
 from .ocv import OCVCurve
 
 # Default time-constant search ranges (s) per number of RC branches.
@@ -26,6 +26,8 @@ DEFAULT_TAU_BOUNDS = {
     1: [(0.5, 2000.0)],
     2: [(0.5, 60.0), (60.0, 3000.0)],
 }
+# Search range for the slow branch fitted on the 1 h relaxations (s).
+SLOW_TAU_BOUNDS = (100.0, 10000.0)
 
 
 def rc_voltages(current: np.ndarray, dt: np.ndarray, r: float, tau: float) -> np.ndarray:
@@ -69,6 +71,8 @@ def fit_segment(
     temp: float,
     n_rc: int = 2,
     tau_bounds=None,
+    i0: float = float("inf"),
+    bv_n: int = 1,
 ) -> SegmentFit:
     """Fit an n-RC model to one segment that starts at rest.
 
@@ -76,6 +80,7 @@ def fit_segment(
     current : (N,) A, i > 0 discharge
     voltage : (N,) V
     soc0    : SoC at the first sample
+    i0      : fixed Butler-Volmer exchange current (A); inf = linear model
     """
     t = np.asarray(time, dtype=float)
     i = np.asarray(current, dtype=float)
@@ -85,6 +90,8 @@ def fit_segment(
     # Anchor OCV to the pre-pulse rest voltage (removes residual hysteresis offset).
     ocv_t = ocv(soc, temp)
     ocv_t = ocv_t + (v[0] - ocv_t[0])
+    # The Butler-Volmer drop depends only on the input, so it is removed up front.
+    ocv_t = ocv_t - bv_overpotential(i, temp, i0, bv_n)
 
     tau_bounds = tau_bounds or DEFAULT_TAU_BOUNDS[n_rc]
 
@@ -113,9 +120,59 @@ def fit_segment(
     r0, rs, taus = unpack(res.x)
     rmse = float(np.sqrt(np.mean(res.fun**2)))
     return SegmentFit(
-        params=ECMParams(r0=float(r0), r=tuple(map(float, rs)), tau=tuple(map(float, taus))),
+        params=ECMParams(r0=float(r0), r=tuple(map(float, rs)), tau=tuple(map(float, taus)), i0=float(i0), bv_n=int(bv_n)),
         rmse_v=rmse,
         soc_mid=float(np.mean(soc)),
         temp=float(temp),
         success=bool(res.success),
     )
+
+
+@dataclass
+class SlowFit:
+    r: float          # ohm
+    tau: float        # s
+    offset_v: float   # V, constant added to the OCV curve over the segment
+    rmse_v: float
+    soc_end: float
+
+
+def fit_slow_branch(time, current, voltage, soc, ocv: OCVCurve, temp: float, fast: ECMParams,
+                    tau_bounds=SLOW_TAU_BOUNDS, n_grid: int = 60) -> SlowFit:
+    """Fit one slow RC branch and an OCV offset on a segment made of a sustained
+    discharge step followed by a long rest, with the fast parameters held fixed.
+
+        v = OCV(soc) + c - R0 i - eta(i) - sum_fast v_j - v_slow(R, tau)
+
+    For a given tau the model is linear in (c, R), so tau is scanned on a log grid
+    and (c, R) are solved by least squares at each grid point (variable
+    projection). Residuals are weighted by sqrt(dt) so the fit minimises the time
+    integral of the squared error and the densely logged parts do not dominate.
+    """
+    t = np.asarray(time, dtype=float)
+    i = np.asarray(current, dtype=float)
+    v = np.asarray(voltage, dtype=float)
+    dt = np.diff(t, append=t[-1] + (t[-1] - t[-2]))
+    v_fast = fast.r0 * i + bv_overpotential(i, temp, fast.i0, fast.bv_n) + sum(
+        rc_voltages(i, dt, r, tau) for r, tau in zip(fast.r, fast.tau))
+    y = v - (ocv(np.asarray(soc), temp) - v_fast)   # = c - v_slow
+    w = np.sqrt(dt / dt.sum())
+    best = None
+    for tau in np.geomspace(*tau_bounds, n_grid):
+        basis = rc_voltages(i, dt, 1.0, tau)        # v_slow for R = 1 ohm
+        A = np.c_[np.ones_like(basis), -basis] * w[:, None]
+        coef, *_ = np.linalg.lstsq(A, y * w, rcond=None)
+        c, r = coef
+        if r <= 0:
+            continue
+        res = (A @ coef - y * w)
+        sse = float(res @ res)
+        if best is None or sse < best[0]:
+            best = (sse, float(r), float(tau), float(c))
+    if best is None:
+        # No positive slow resistance explains the data: report a negligible branch.
+        c = float(np.sum(y * w * w))
+        res = (y - c) * w
+        best = (float(res @ res), 1e-6, float(np.sqrt(tau_bounds[0] * tau_bounds[1])), c)
+    sse, r, tau, c = best
+    return SlowFit(r=r, tau=tau, offset_v=c, rmse_v=float(np.sqrt(sse)), soc_end=float(np.asarray(soc)[-1]))

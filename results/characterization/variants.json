@@ -1,0 +1,65 @@
+{
+ "1rc": {
+  "params": "params_1rc.json",
+  "ocv": "ocv_disir.json",
+  "description": "1RC, linear"
+ },
+ "2rc": {
+  "params": "params_2rc.json",
+  "ocv": "ocv_disir.json",
+  "description": "2RC, linear (M2 baseline)"
+ },
+ "2rc_allsoc": {
+  "params": "params_2rc_allsoc.json",
+  "ocv": "ocv_disir.json",
+  "description": "2RC, linear, all SoC levels kept"
+ },
+ "2rc_rest": {
+  "params": "params_2rc_rest.json",
+  "ocv": "ocv_rest.json",
+  "description": "2RC, linear, rest-anchored OCV"
+ },
+ "3rc": {
+  "params": "params_3rc.json",
+  "ocv": "ocv_slow_linear.json",
+  "description": "2RC + slow branch, rest-anchored OCV"
+ },
+ "2rc_bv": {
+  "params": "params_2rc_bv.json",
+  "ocv": "ocv_rest.json",
+  "description": "2RC + Butler-Volmer, rest-anchored OCV"
+ },
+ "3rc_bv": {
+  "params": "params_3rc_bv.json",
+  "ocv": "ocv_slow_bv.json",
+  "description": "2RC + slow branch + Butler-Volmer, rest-anchored OCV"
+ },
+ "3rc_dc_avg": {
+  "params": "params_3rc_dc_avg.json",
+  "ocv": "ocv_3rc_dc_avg.json",
+  "description": "2RC (HPPC) + calibrated slow branch, OCV shape: C/20 average",
+  "thermal_gain": 1.0,
+  "calibrated_on": "training drive cycles (slow branch, OCV offset)"
+ },
+ "3rc_dc_dis": {
+  "params": "params_3rc_dc_dis.json",
+  "ocv": "ocv_3rc_dc_dis.json",
+  "description": "2RC (HPPC) + calibrated slow branch, OCV shape: C/20 discharge + IR",
+  "thermal_gain": 1.0,
+  "calibrated_on": "training drive cycles (slow branch, OCV offset)"
+ },
+ "3rc_bv_dc_avg": {
+  "params": "params_3rc_bv_dc_avg.json",
+  "ocv": "ocv_3rc_bv_dc_avg.json",
+  "description": "2RC + Butler-Volmer (HPPC) + calibrated slow branch, OCV shape: C/20 average",
+  "thermal_gain": 1.0,
+  "calibrated_on": "training drive cycles (slow branch, OCV offset)"
+ },
+ "3rc_bv_dc_dis": {
+  "params": "params_3rc_bv_dc_dis.json",
+  "ocv": "ocv_3rc_bv_dc_dis.json",
+  "description": "2RC + Butler-Volmer (HPPC) + calibrated slow branch, OCV shape: C/20 discharge + IR",
+  "thermal_gain": 1.0,
+  "calibrated_on": "training drive cycles (slow branch, OCV offset)"
+ }
+}
