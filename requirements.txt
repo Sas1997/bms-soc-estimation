@@ -1,0 +1,11 @@
+# Pinned versions used to produce the results in this repository (Python 3.13).
+# For CPU-only PyTorch on a laptop or Raspberry Pi, see https://pytorch.org/get-started/locally/
+numpy==2.5.3
+scipy==1.18.1
+pandas==3.0.5
+torch==2.15.0
+pyarrow==26.0.1
+h5py==3.16.0
+matplotlib==3.11.2
+tabulate==0.10.0
+pytest==9.1.1
