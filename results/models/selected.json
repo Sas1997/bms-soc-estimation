@@ -1,4 +1,4 @@
 {
- "lstm": "lstm",
+ "lstm": "lstm_aug",
  "transformer": "transformer"
 }

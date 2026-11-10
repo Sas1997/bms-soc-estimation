@@ -1,14 +1,14 @@
 {
  "2rc": {
-  "k_r": 1.0,
-  "q_soc": 1e-05,
-  "q_v": 0.001,
-  "val_score_pts": 3.112
+  "k_r": 0.5,
+  "q_soc": 1e-06,
+  "q_v": 0.01,
+  "val_score_pts": 3.012
  },
  "3rc_dc_dis": {
-  "k_r": 2.0,
-  "q_soc": 0.0001,
-  "q_v": 0.001,
-  "val_score_pts": 2.087
+  "k_r": 4.0,
+  "q_soc": 1e-05,
+  "q_v": 0.0001,
+  "val_score_pts": 2.068
  }
 }

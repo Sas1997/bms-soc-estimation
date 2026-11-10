@@ -3,12 +3,21 @@
 The reference SoC is coulomb counting with a known start and the laboratory
 current sensor, so with a correct initial SoC and a perfect sensor the best
 "filter" is one that ignores voltage altogether. Tuning on that case alone would
-switch the voltage feedback off. The objective therefore averages three cases
+switch the voltage feedback off. The objective therefore averages four cases
 on each validation cycle:
     nominal            correct initial SoC, clean signals
-    initial SoC -20    estimator starts at 0.80 instead of 1.00
+    initial SoC -20    estimator starts at 0.80 instead of 1.00, cell at rest
+    late start -20     estimation starts 20 min into the cycle, under load,
+                       20 points below the true SoC
     current bias       +50 mA added to the measured current
 Score = mean over cases of the mean SoC RMSE over the validation cycles.
+
+The late-start case was added after the first full evaluation. Without it, a
+wide grid lets the 2RC filter put all its process noise on the RC voltages: it
+then corrects SoC once from the rest voltage and coulomb-counts afterwards,
+which scores well on the other three cases and recovers poorly under load.
+This is the one protocol decision that was informed by test-set results; it is
+recorded in the README.
 
 Grid (per 1 s step):
     k_r    scale on the temperature-dependent model voltage error sigma_v(T)
@@ -16,7 +25,8 @@ Grid (per 1 s step):
     q_v    process noise on each RC voltage (V)
 Fixed: P0 = diag(0.2^2, 0.01^2, ...).
 
-Writes results/characterization/ekf_tuning.json and results/tables/m3_ekf_tuning.md.
+Writes results/characterization/ekf_tuning.json, results/m3_ekf_tuning_grid.csv (every
+setting) and results/tables/m3_ekf_tuning.md.
 Run: python experiments/m3_tune_ekf.py
 """
 
@@ -39,6 +49,7 @@ from socest.estimators import EKFEstimator  # noqa: E402
 from socest.metrics import Perturbation, soc_errors  # noqa: E402
 
 CASES = [Perturbation("nominal"), Perturbation("initial SoC -20 pts", soc0_error=-0.20),
+         Perturbation("late start, SoC -20 pts", soc0_error=-0.20, start_s=1200),
          Perturbation("current bias +50 mA", i_bias=0.05)]
 GRID = {"k_r": [0.5, 1.0, 2.0, 4.0, 8.0], "q_soc": [1e-6, 1e-5, 1e-4, 1e-3], "q_v": [1e-4, 1e-3, 1e-2]}
 
@@ -47,10 +58,12 @@ def score(est, data):
     out = {}
     for case in CASES:
         errs = []
+        k0 = case.start_s
         for r, u in data:
-            v, i, T = case.apply(u.voltage_v.to_numpy(), u.current_a.to_numpy(), u.temp_degc.to_numpy(), seed=0)
-            soc = est(v, i, T, 1.0 + case.soc0_error)
-            errs.append(100 * soc_errors(soc, u.soc_ref)["rmse"])
+            ref = u.soc_ref.to_numpy()[k0:]
+            v, i, T = case.apply(u.voltage_v.to_numpy()[k0:], u.current_a.to_numpy()[k0:], u.temp_degc.to_numpy()[k0:], seed=0)
+            soc = est(v, i, T, ref[0] + case.soc0_error)
+            errs.append(100 * soc_errors(soc, ref)["rmse"])
         out[case.name] = float(np.mean(errs))
     out["score"] = float(np.mean(list(out.values())))
     return out
@@ -59,13 +72,14 @@ def score(est, data):
 def main():
     data = load_split("val")
     variants = ["2rc", selected_variant()]
-    tuning_edge = {}
+    tuning_edge, grid_rows = {}, []
     tuning, md = {}, ["# EKF noise tuning on the validation cycles", "", __doc__.split("Writes")[0].split("\n\n", 1)[1].strip(), ""]
     for variant in variants:
         rows = []
         for k_r, q_soc, q_v in itertools.product(*GRID.values()):
             s = score(EKFEstimator(variant, k_r=k_r, q_soc=q_soc, q_v=q_v), data)
             rows.append({"k_r": k_r, "q_soc": q_soc, "q_v": q_v, **s})
+            grid_rows.append({"variant": variant, **rows[-1]})
             print(variant, rows[-1], flush=True)
         tab = pd.DataFrame(rows).sort_values("score").reset_index(drop=True)
         best = tab.iloc[0]
@@ -80,6 +94,7 @@ def main():
                + (f"The best setting is at the edge of the grid for: {', '.join(edge)}." if edge
                   else "The best setting is inside the grid for every parameter."), ""]
         tuning_edge[variant] = edge
+    pd.DataFrame(grid_rows).to_csv(ROOT / "results" / "m3_ekf_tuning_grid.csv", index=False)
     (CHAR / "ekf_tuning.json").write_text(json.dumps(tuning, indent=1))
     (ROOT / "results" / "tables" / "m3_ekf_tuning.md").write_text("\n".join(md))
     print(json.dumps(tuning, indent=1))

@@ -1,10 +1,12 @@
-"""Headline figure for the README, from results/m4_metrics.csv and results/m4_traces.npz.
+"""Headline figure for the README, from results/m4_metrics.csv, results/m4_traces.npz and the
+validation tuning tables (results/m3_ekf_tuning_grid.csv, results/m3_nn_selection.csv).
 
 Panels:
   A  nominal SoC RMSE by temperature (both test sets; 10 degC is the held-out temperature)
   B  SoC RMSE by robustness case (all test cycles)
   C  SoC error over time, UDDS at -20 degC, estimation started under load 20 points low
-  D  SoC error over time, US06 at 10 degC (held-out temperature), nominal
+  D  validation cycles: nominal RMSE against RMSE after a late start, for every EKF
+     noise setting on the tuning grid and for the selected networks
 
 Run after m4_evaluate.py: python experiments/m4_figures.py
 """
@@ -83,6 +85,36 @@ def trace(ax, tr, key, case, names, title):
     ax.set_title(title, loc="left", fontsize=10.5, color=INK)
 
 
+def tradeoff(ax):
+    """Validation cycles: nominal RMSE against RMSE after a late start, one dot per EKF noise setting."""
+    import json
+
+    grid = pd.read_csv(RES / "m3_ekf_tuning_grid.csv")
+    nn = pd.read_csv(RES / "m3_nn_selection.csv")
+    chosen = json.loads((RES / "characterization" / "ekf_tuning.json").read_text())
+    picked = json.loads((RES / "models" / "selected.json").read_text())
+    late = "late start, SoC -20 pts"
+    for variant, name in (("2rc", "EKF, 2RC (HPPC only)"), (next(v for v in chosen if v != "2rc"), "EKF, 3RC (calibrated)")):
+        g = grid[grid.variant == variant]
+        ax.scatter(g.nominal, g[late], s=16, color=COLORS[name], alpha=0.45, linewidths=0)
+        c = chosen[variant]
+        sel = g[(g.k_r == c["k_r"]) & (g.q_soc == c["q_soc"]) & (g.q_v == c["q_v"])].iloc[0]
+        ax.scatter(sel.nominal, sel[late], s=90, color=COLORS[name], edgecolors=INK, linewidths=1.5, zorder=3)
+        ax.annotate("selected", (sel.nominal, sel[late]), textcoords="offset points", xytext=(8, 6), fontsize=8.5, color=INK)
+    for kind, name in (("lstm", "LSTM"), ("transformer", "Transformer")):
+        r = nn[nn.checkpoint == picked[kind]].iloc[0]
+        ax.scatter(r.nominal, r[late], s=110, marker="D", color=COLORS[name], edgecolors=INK, linewidths=1.5, zorder=3)
+        off, ha = ((-10, -14), "right") if kind == "lstm" else ((10, 3), "left")
+        ax.annotate(name, (r.nominal, r[late]), textcoords="offset points", xytext=off, ha=ha, fontsize=8.5, color=INK)
+    style(ax, "SoC RMSE after a late start (points)")
+    ax.xaxis.grid(True, color=GRID, lw=0.8)
+    ax.set_xlabel("SoC RMSE, nominal (points)", color=MUTED, fontsize=9)
+    ax.set_xlim(left=0)
+    ax.set_ylim(bottom=0)
+    ax.set_title("D  Validation cycles: each dot is one EKF noise setting, diamonds are the networks",
+                 loc="left", fontsize=10.5, color=INK)
+
+
 def main():
     res = pd.read_csv(RES / "m4_metrics.csv")
     tr = np.load(RES / "m4_traces.npz")
@@ -108,7 +140,7 @@ def main():
 
     trace(ax[1, 0], tr, "n20degC|UDDS", "late start, SoC -20 pts", names,
           "C  UDDS at -20 °C, estimation started 20 min in, 20 points low")
-    trace(ax[1, 1], tr, "10degC|US06", "nominal", names, "D  US06 at 10 °C (held-out temperature), nominal")
+    tradeoff(ax[1, 1])
 
     handles, labels = ax[0, 1].get_legend_handles_labels()
     fig.legend(handles, labels, loc="upper center", ncol=len(names), frameon=False, fontsize=9.5,

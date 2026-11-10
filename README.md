@@ -13,22 +13,23 @@ SoC error in percentage points on test data that no estimator was fitted, calibr
 | Estimator | RMSE, unseen cycles | RMSE, unseen temperature (10 °C) | Max error, unseen cycles | RMSE, started under load 20 points low | RMSE, +100 mA current bias | Time per 1 Hz step |
 |:--|--:|--:|--:|--:|--:|--:|
 | Coulomb counting | 0.11 | 0.30 | 0.18 | 19.97 | 4.62 | under 0.001 ms |
-| EKF, 2RC (HPPC only) | 1.73 | 1.34 | 2.93 | 3.97 | 2.77 | 0.06 ms |
-| EKF, 3RC (calibrated) | **0.76** | **1.15** | **1.50** | 2.23 | **1.63** | 0.06 ms |
-| LSTM, 4,769 parameters | 1.35 | 1.42 | 4.72 | **1.50** | 1.89 | 0.22 ms |
-| Transformer, 17,697 parameters | 1.62 | 1.40 | 5.93 | 1.83 | 1.95 | 0.27 ms |
+| EKF, 2RC (HPPC only) | 0.55 | 0.51 | 0.89 | 6.08 | 3.46 | 0.06 ms |
+| EKF, 3RC (calibrated) | 1.14 | 1.78 | 1.96 | 2.59 | 1.93 | 0.06 ms |
+| LSTM, 4,769 parameters | 1.38 | 1.45 | 4.90 | **1.53** | **1.84** | 0.22 ms |
+| Transformer, 17,697 parameters | 1.62 | 1.40 | 5.93 | 1.83 | 1.95 | 0.31 ms |
 
 The two robustness columns are on the unseen-cycle set. "Max error" is the mean over cycles of each cycle's largest error. Timing is from a cloud virtual machine (Intel Xeon, 2.30 GHz, one thread). Full tables: [results/tables/m4_summary.md](results/tables/m4_summary.md), [results/tables/m4_cost.md](results/tables/m4_cost.md).
 
 What the numbers say:
 
-1. **The calibrated EKF is the most accurate estimator in nominal conditions**, on unseen drive cycles and at the unseen temperature. The Transformer does not beat it anywhere in the nominal tests.
-2. **The quality of the cell model decides the EKF.** With a 2RC model identified from HPPC pulses alone, the EKF reaches 3.69 points RMSE at -20 °C and loses to both networks at -20 and -10 °C. Adding a slow branch calibrated on the training drive cycles cuts that to 1.62 points.
-3. **The LSTM matches or beats the Transformer with about a quarter of the parameters.** Three further Transformer variants (10 min window, noise augmentation, causal per-token training) did not improve on validation data. See [results/tables/m3_nn_selection.md](results/tables/m3_nn_selection.md).
-4. **The networks recover faster from a cold start under load.** They need no initial state, so they are the best estimators when estimation starts mid-cycle with a 20-point error. At -20 °C the LSTM is also slightly ahead of the calibrated EKF (1.51 vs 1.62 points).
-5. **The networks have larger peak errors**: 4.7 to 5.9 points against 1.5 for the calibrated EKF. Their estimate is noisy from sample to sample (panels C and D).
-6. **Coulomb counting is near-exact here only by construction.** The reference SoC is itself coulomb counting with a known full-charge start and a laboratory current sensor. It never corrects a wrong initial SoC, and a 100 mA sensor bias costs it 4.6 points.
-7. **Compute cost is not the constraint at 1 Hz.** Every estimator runs in well under a millisecond per step. The practical difference is memory: the EKF process peaks near 200 MB (Python, NumPy, pandas), the network processes near 690 MB because of the PyTorch runtime.
+1. **There is no single winner, and the nominal column is the least informative one.** The reference SoC is coulomb counting from a verified full charge with a laboratory current sensor, so under nominal conditions an estimator scores well simply by trusting current integration. Coulomb counting "wins" that column and loses every disturbance case.
+2. **The networks are the most consistent estimators.** The LSTM stays between 1.4 and 1.8 points RMSE in every case on both test sets. On the validation cycles, no EKF noise setting on the tuning grid recovers from a late start as well as the networks (best 1.97 points against 1.35 and 1.49), and the settings with better nominal accuracy than the networks recover far worse (panel D).
+3. **The calibrated EKF has the smallest peak errors of the closed-loop estimators**: 2.0 points on average against 4.9 to 5.9 for the networks, whose estimates are noisy from sample to sample (panel C). It is also ahead of the networks on unseen cycles in nominal conditions (1.14 against 1.38 and 1.62).
+4. **The EKF loses more than the networks at the unseen temperature.** At 10 °C it must interpolate its OCV, parameters and capacity between 0 and 25 °C, and its error rises to 1.78 points. The networks, which also never saw 10 °C, stay at 1.40 to 1.45.
+5. **The quality of the cell model decides whether the EKF is a closed-loop estimator at all.** With the 2RC model identified from HPPC pulses alone, the tuning turns the voltage feedback down until the filter behaves like coulomb counting: excellent nominal numbers, 6.1 points after a late start, and 6 of 29 test cycles that never return within 5 points. With the calibrated 3RC model the filter recovers in all 29 cycles (median 160 s).
+6. **The LSTM matches the Transformer with about a quarter of the parameters.** Three further Transformer variants (10 min window, noise augmentation, causal per-token training) did not improve on validation data. See [results/tables/m3_nn_selection.md](results/tables/m3_nn_selection.md).
+7. **EKF results are sensitive to noise tuning.** Two settings for the calibrated EKF that differ by 0.03 points on the validation objective give 1.14 and 0.76 points nominal RMSE on the unseen test cycles. The table reports the one the validation objective picked. See Limitations.
+8. **Compute cost is not the constraint at 1 Hz.** Every estimator runs in well under a millisecond per step. The practical difference is memory: the EKF process peaks near 200 MB (Python, NumPy, pandas), the network processes near 690 MB because of the PyTorch runtime.
 
 ## Why this comparison
 
@@ -82,10 +83,10 @@ No 10 °C test of any kind (C/20, HPPC or drive cycle) is used to build the cell
 ### Estimators
 
 - **Coulomb counting**: open loop, with the capacity at the starting temperature.
-- **EKF** (Plett, 2004): state = SoC and the RC voltages, measurement = terminal voltage, Joseph-form covariance update. Measurement noise is set from the model's own voltage error on the training cycles at each temperature, times a scale `k_r`. `k_r` and the process noise are chosen on the validation cycles over three cases (nominal, initial SoC 20 points low, 50 mA current bias), because tuning on the nominal case alone would switch the voltage feedback off. Chosen for the selected model: `k_r` = 2, `q_soc` = 1e-4, `q_v` = 1e-3 V per step, with `P0` = diag(0.2², 0.01², ...). Grid and scores: [results/tables/m3_ekf_tuning.md](results/tables/m3_ekf_tuning.md).
+- **EKF** (Plett, 2004): state = SoC and the RC voltages, measurement = terminal voltage, Joseph-form covariance update. Measurement noise is set from the model's own voltage error on the training cycles at each temperature, times a scale `k_r`. `k_r` and the process noise are chosen on the validation cycles over four cases: nominal, initial SoC 20 points low at rest, a late start 20 points low under load, and a 50 mA current bias. Tuning on the nominal case alone would switch the voltage feedback off. Chosen for the calibrated model: `k_r` = 4, `q_soc` = 1e-5, `q_v` = 1e-4 V per step, with `P0` = diag(0.2², 0.01², ...). All 60 settings per model: [results/m3_ekf_tuning_grid.csv](results/m3_ekf_tuning_grid.csv), summary in [results/tables/m3_ekf_tuning.md](results/tables/m3_ekf_tuning.md).
 - **Transformer**: two encoder layers, 32-dimensional, four heads, on the last 300 s of voltage, current and temperature at 1 Hz. The window is split into 5 s patches (60 tokens) to keep inference light. 17,697 parameters. No engineered features.
 - **LSTM**: one layer, 32 hidden units, same input window. 4,769 parameters.
-- Networks train on the training cycles with early stopping on the validation cycles, seed 42. Normalisation statistics come from the training cycles only, and windows never cross cycle boundaries.
+- Networks train on the training cycles with early stopping on the validation cycles, seed 42. Normalisation statistics come from the training cycles only, and windows never cross cycle boundaries. Six candidates were trained and one of each type was picked on the same four-case validation objective as the EKF: the plain Transformer, and the LSTM trained with added sensor noise (5 mV, 50 mA, 0.5 °C) and a random current offset, which scored 0.002 points ahead of the plain LSTM.
 
 ### Evaluation
 
@@ -103,12 +104,22 @@ Nominal RMSE by temperature (points):
 
 | Estimator | -20 °C | -10 °C | 0 °C | 10 °C (held out) | 25 °C | 40 °C |
 |:--|--:|--:|--:|--:|--:|--:|
-| EKF, 2RC (HPPC only) | 3.69 | 2.43 | 0.78 | 1.34 | 0.80 | 0.74 |
-| EKF, 3RC (calibrated) | 1.62 | 0.59 | 0.56 | 1.15 | 0.50 | 0.45 |
-| LSTM | 1.51 | 1.77 | 1.51 | 1.42 | 1.02 | 0.84 |
+| EKF, 2RC (HPPC only) | 1.56 | 0.39 | 0.15 | 0.51 | 0.19 | 0.37 |
+| EKF, 3RC (calibrated) | 1.90 | 1.09 | 1.09 | 1.78 | 0.90 | 0.67 |
+| LSTM | 1.56 | 1.79 | 1.58 | 1.45 | 1.03 | 0.87 |
 | Transformer | 2.02 | 1.95 | 1.69 | 1.40 | 1.18 | 1.15 |
 
-After a late start the calibrated EKF is back within 5 points in a median of 63 s, and within 881 s in 90 % of test cycles. White sensor noise at these levels changes no estimator by more than 0.1 point.
+RMSE by case, mean over all 29 test cycles (panel B):
+
+| Estimator | Nominal | Start at rest, 20 points low | Start under load, 20 points low | Sensor noise | +100 mA current bias |
+|:--|--:|--:|--:|--:|--:|
+| Coulomb counting | 0.18 | 19.93 | 19.89 | 0.21 | 4.49 |
+| EKF, 2RC (HPPC only) | 0.54 | 0.78 | 4.79 | 0.44 | 3.44 |
+| EKF, 3RC (calibrated) | 1.37 | 1.65 | 2.69 | 1.32 | 1.72 |
+| LSTM | 1.41 | 1.41 | 1.53 | 1.45 | 1.79 |
+| Transformer | 1.55 | 1.55 | 1.71 | 1.56 | 1.86 |
+
+The networks have no initial state, so a wrong initial SoC at rest does not affect them. After a late start the calibrated EKF is back within 5 points in a median of 160 s, and within 1,540 s in 90 % of test cycles. White sensor noise at these levels changes no estimator by more than 0.1 point.
 
 Compute cost is measured sample by sample with the streaming estimators in `src/socest/streaming.py`, which reproduce the batch results exactly (checked by a unit test). To measure another machine, including a Raspberry Pi:
 
@@ -124,7 +135,7 @@ Python 3.13 with the pinned packages in `requirements.txt`.
 git clone https://github.com/SAS1997/bms-soc-estimation.git
 cd bms-soc-estimation
 pip install -r requirements.txt
-python run_all.py --skip-train     # about 30 min on two cores, uses the committed network weights
+python run_all.py --skip-train     # about 50 min on two cores, uses the committed network weights
 python run_all.py                  # also retrains the six network candidates, about 2 h on CPU
 python -m pytest -q                # unit tests
 ```
@@ -153,7 +164,9 @@ run_all.py      one-command reproduction
 - **Temperature and test order are confounded.** The temperatures were tested in the order 25, 40, 10, 0, -10, -20 °C on the same cell.
 - **The slow branch is calibrated on drive cycles, not on a dedicated test.** It is fitted on the same training cycles the networks use, which keeps the comparison fair, but it is an empirical correction.
 - **The thermal gain is a fitted number.** Model parameters are looked up at T + g (T - T_start), an estimate of the temperature inside the cell from the single reported temperature. The best g was 1.0, the largest value tried, so it is not a measured property.
-- **Two EKF settings sit at the edge of their search grid** (`q_soc`), and the score is flat nearby (2.09 to 2.23 points across the best eight settings).
+- **EKF tuning is flat and noisy.** Only eight validation cycles are available, and several noise settings score within a few hundredths of a point of each other. An earlier run of this pipeline, with three tuning cases instead of four, picked `k_r` = 2, `q_soc` = 1e-4, `q_v` = 1e-3 for the calibrated EKF. That setting scores 2.09 against 2.07 on the current validation objective, and on the test sets it gave 0.76 (unseen cycles) and 1.15 (10 °C) points nominal RMSE, 2.23 after a late start and 1.63 under current bias: better than the selected setting in every case. It is reported here for transparency and was not selected, because selecting it would use test results.
+- **One protocol decision was informed by a test result.** The late-start case was added to the tuning objective after the first full evaluation showed that the 2RC filter recovered poorly under load. The change did not alter the 2RC setting; it did change the calibrated EKF's setting as described above.
+- **The selected EKF settings sit at the edge of the search grid** for one parameter (`q_v`) with the calibrated model and for all three with the 2RC model.
 - **Networks were trained with one seed**, so seed-to-seed spread is not reported.
 - **The 40 °C data is incomplete**: three training cycles and no validation cycles.
 - **Cost was measured on a cloud virtual machine only.** Raspberry Pi numbers are not yet in the table.
