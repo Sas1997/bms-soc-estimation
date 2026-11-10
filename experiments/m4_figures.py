@@ -111,7 +111,7 @@ def tradeoff(ax):
     ax.set_xlabel("SoC RMSE, nominal (points)", color=MUTED, fontsize=9)
     ax.set_xlim(left=0)
     ax.set_ylim(bottom=0)
-    ax.set_title("D  Validation cycles: each dot is one EKF noise setting, diamonds are the networks",
+    ax.set_title("D  Validation cycles: EKF noise settings (dots), networks (diamonds)",
                  loc="left", fontsize=10.5, color=INK)
 
 
