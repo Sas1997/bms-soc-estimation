@@ -23,8 +23,13 @@ class SoCTransformer(nn.Module):
     inference light enough for a Raspberry Pi. patch = 1 gives one token per sample.
     """
 
-    def __init__(self, n_in=3, d_model=32, n_heads=4, n_layers=2, d_ff=64, window=300, dropout=0.1, patch=5):
+    def __init__(self, n_in=3, d_model=32, n_heads=4, n_layers=2, d_ff=64, window=300, dropout=0.1, patch=5,
+                 causal=False):
+        """causal=True masks attention so each token sees only earlier tokens. The
+        model can then be trained to predict SoC at the end of every patch
+        (forward_all), which gives one target per token instead of one per window."""
         super().__init__()
+        self.causal = causal
         if window % patch:
             raise ValueError("window must be a multiple of patch")
         self.patch = patch
@@ -36,6 +41,7 @@ class SoCTransformer(nn.Module):
         pe[:, 0::2] = torch.sin(pos * div)
         pe[:, 1::2] = torch.cos(pos * div)
         self.register_buffer("pe", pe, persistent=False)
+        self.register_buffer("mask", torch.triu(torch.ones(n_tok, n_tok, dtype=torch.bool), diagonal=1), persistent=False)
         layer = nn.TransformerEncoderLayer(
             d_model, n_heads, d_ff, dropout, batch_first=True, norm_first=True
         )
@@ -43,11 +49,18 @@ class SoCTransformer(nn.Module):
         self.norm = nn.LayerNorm(d_model)
         self.head = nn.Linear(d_model, 1)
 
-    def forward(self, x):
+    def _encode(self, x):
         h = self.inp(x.transpose(1, 2)).transpose(1, 2)
         h = h + self.pe[: h.shape[1]]
-        h = self.encoder(h)
-        return self.head(self.norm(h[:, -1])).squeeze(-1)
+        mask = self.mask[: h.shape[1], : h.shape[1]] if self.causal else None
+        return self.norm(self.encoder(h, mask=mask))
+
+    def forward(self, x):
+        return self.head(self._encode(x)[:, -1]).squeeze(-1)
+
+    def forward_all(self, x):
+        """SoC at the end of every patch, shape (batch, window // patch). Requires causal=True."""
+        return self.head(self._encode(x)).squeeze(-1)
 
 
 class SoCLSTM(nn.Module):

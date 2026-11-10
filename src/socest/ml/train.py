@@ -74,8 +74,10 @@ def train(
     if model_name == "transformer":
         model_kwargs.setdefault("window", window)
 
+    # Per-token training: a causal Transformer is supervised at the end of every patch.
+    dense = model_name == "transformer" and model_kwargs.get("causal", False)
     norm = Normalizer.fit(train_cycles)
-    ds = WindowDataset(train_cycles, norm, window, stride=stride)
+    ds = WindowDataset(train_cycles, norm, window, stride=stride, seq_every=model_kwargs.get("patch", 5) if dense else 0)
     g = torch.Generator().manual_seed(seed)
     dl = DataLoader(ds, batch_size=batch_size, shuffle=True, generator=g, drop_last=True)
 
@@ -100,7 +102,7 @@ def train(
                 if current_bias_std:
                     x[:, :, 1] += torch.randn(x.shape[0], 1, device=device) * aug_bias
             opt.zero_grad()
-            loss = loss_fn(model(x), y)
+            loss = loss_fn(model.forward_all(x) if dense else model(x), y)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             opt.step()

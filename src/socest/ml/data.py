@@ -51,14 +51,17 @@ class WindowDataset(Dataset):
     step gets an estimate; this mirrors a device that has just started up.
     """
 
-    def __init__(self, cycles, normalizer: Normalizer, window: int, stride: int = 1):
-        self.window = window
-        self.xs, self.ys, self.index = [], [], []
+    def __init__(self, cycles, normalizer: Normalizer, window: int, stride: int = 1, seq_every: int = 0):
+        """seq_every > 0 returns the target at the end of every `seq_every` samples
+        of the window (for per-token training) instead of only at the window end."""
+        self.window, self.seq_every = window, seq_every
+        self.xs, self.ys, self.ypad, self.index = [], [], [], []
         for c_id, c in enumerate(cycles):
             x = normalizer(c["x"]).astype(np.float32)
             pad = np.repeat(x[:1], window - 1, axis=0)
             self.xs.append(np.concatenate([pad, x], axis=0))
             self.ys.append(c["y"])
+            self.ypad.append(np.concatenate([np.repeat(c["y"][:1], window - 1), c["y"]]))
             self.index.extend((c_id, k) for k in range(0, len(c["y"]), stride))
 
     def __len__(self):
@@ -67,4 +70,7 @@ class WindowDataset(Dataset):
     def __getitem__(self, idx):
         c_id, k = self.index[idx]
         x = self.xs[c_id][k : k + self.window]
+        if self.seq_every:
+            y = self.ypad[c_id][k : k + self.window][self.seq_every - 1 :: self.seq_every]
+            return torch.from_numpy(x), torch.from_numpy(np.ascontiguousarray(y))
         return torch.from_numpy(x), torch.tensor(self.ys[c_id][k])

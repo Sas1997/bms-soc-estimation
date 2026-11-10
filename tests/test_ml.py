@@ -54,3 +54,24 @@ def test_training_learns_on_synthetic_data(tmp_path, model, name):
     m, norm, meta2 = load(tmp_path)
     pred = predict(m, cycles[3], norm, meta2["window"])
     assert pred.shape == cycles[3]["y"].shape
+
+
+def test_causal_transformer_ignores_future_and_trains_per_token(tmp_path, model):
+    torch.manual_seed(0)
+    m = SoCTransformer(window=40, patch=5, causal=True).eval()
+    x = torch.randn(2, 40, 3)
+    x2 = x.clone()
+    x2[:, 20:] += 1.0                       # change only the second half
+    a, b = m.forward_all(x), m.forward_all(x2)
+    assert a.shape == (2, 8)
+    torch.testing.assert_close(a[:, :4], b[:, :4])      # tokens before the change are unaffected
+    assert not torch.allclose(a[:, 4:], b[:, 4:])
+    torch.testing.assert_close(m(x), a[:, -1])
+
+    cycles = synthetic_cycles(model, 3, seed=1)
+    ds = WindowDataset(cycles[:1], Normalizer.fit(cycles[:1]), window=40, seq_every=5)
+    xb, yb = ds[100]
+    assert yb.shape == (8,) and yb[-1].item() == pytest.approx(float(cycles[0]["y"][100]))
+    meta = train(cycles[:2], cycles[2:], tmp_path, model_name="transformer", model_kwargs={"patch": 5, "causal": True},
+                 window=40, stride=10, max_epochs=3, batch_size=64, seed=0, device="cpu")
+    assert meta["best_val_rmse"] < 0.2

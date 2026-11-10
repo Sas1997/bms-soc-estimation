@@ -1,0 +1,24 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below, and cite the dataset it is built on."
+title: "bms-soc-estimation: physics-based and data-driven state-of-charge estimation on the LG 18650HG2 dataset"
+authors:
+  - family-names: Sadat
+    given-names: Seyyed Ali
+    affiliation: "Western University"
+license: AGPL-3.0-only
+repository-code: "https://github.com/SAS1997/bms-soc-estimation"
+references:
+  - type: data
+    title: "LG 18650HG2 Li-ion Battery Data"
+    authors:
+      - family-names: Kollmeyer
+        given-names: Phillip
+      - family-names: Naguib
+        given-names: Mina
+      - family-names: Skells
+        given-names: Michael
+    year: 2020
+    publisher:
+      name: "Mendeley Data"
+    version: "2"
+    doi: 10.17632/b5mj79w5w9.2

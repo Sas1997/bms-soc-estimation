@@ -19,6 +19,8 @@ from .ecm import TheveninModel
 
 
 class EKF:
+    SOC_MIN, SOC_MAX = -0.02, 1.02
+
     def __init__(self, model: TheveninModel, x0, P0, Q, R: float):
         """
         model : TheveninModel
@@ -37,16 +39,24 @@ class EKF:
             raise ValueError("x0, P0, Q dimensions must match the model state size")
         self._I = np.eye(n)
 
-    def update(self, v_meas: float, i: float, temp: float):
-        """Measurement update. Returns the innovation (V)."""
+    def update(self, v_meas: float, i: float, temp: float, R: float | None = None):
+        """Measurement update. Returns the innovation (V).
+
+        R overrides the measurement noise variance for this step (used for a
+        temperature-dependent R). The SoC estimate is kept inside
+        [SOC_MIN, SOC_MAX]; outside that range the OCV table is flat and the
+        filter would lose its voltage feedback.
+        """
+        R = self.R if R is None else R
         v_pred, H = self.model.output(self.x, i, temp)
         innov = v_meas - v_pred
         PHt = self.P @ H
-        S = float(H @ PHt) + self.R
+        S = float(H @ PHt) + R
         K = PHt / S
         self.x = self.x + K * innov
+        self.x[0] = min(max(self.x[0], self.SOC_MIN), self.SOC_MAX)
         IKH = self._I - np.outer(K, H)
-        self.P = IKH @ self.P @ IKH.T + self.R * np.outer(K, K)
+        self.P = IKH @ self.P @ IKH.T + R * np.outer(K, K)
         return innov
 
     def predict(self, i: float, dt: float, temp: float):
@@ -54,9 +64,10 @@ class EKF:
         self.x, A = self.model.transition(self.x, i, dt, temp)
         self.P = A @ self.P @ A.T + self.Q
 
-    def run(self, voltage, current, dt, temp):
+    def run(self, voltage, current, dt, temp, R=None):
         """Filter a full sequence.
 
+        R: optional array (N,) of per-step measurement noise variances.
         Returns dict with soc (N,), soc_std (N,), innovation (N,).
         """
         voltage = np.asarray(voltage, dtype=float)
@@ -64,11 +75,12 @@ class EKF:
         n = voltage.size
         dt = np.broadcast_to(np.asarray(dt, dtype=float), (n,))
         temp = np.broadcast_to(np.asarray(temp, dtype=float), (n,))
+        R = np.broadcast_to(np.asarray(self.R if R is None else R, dtype=float), (n,))
         soc = np.empty(n)
         std = np.empty(n)
         innov = np.empty(n)
         for k in range(n):
-            innov[k] = self.update(voltage[k], current[k], temp[k])
+            innov[k] = self.update(voltage[k], current[k], temp[k], R[k])
             soc[k] = self.x[0]
             std[k] = np.sqrt(max(self.P[0, 0], 0.0))
             self.predict(current[k], dt[k], temp[k])

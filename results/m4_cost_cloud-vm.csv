@@ -1,0 +1,6 @@
+estimator,ms_per_step_median,ms_per_step_p99,peak_rss_mb,table_or_weight_values,storage_kb,label,cpu,machine,python,steps
+Coulomb counting,0.00022499989427160472,0.0005270499787002338,196.55078125,0,0.0,cloud-vm,Intel(R) Xeon(R) Processor @ 2.30GHz,x86_64,3.13.18,1000
+"EKF, 2RC (HPPC only)",0.06387400026142132,0.16134509030962393,200.7421875,1731,37.9111328125,cloud-vm,Intel(R) Xeon(R) Processor @ 2.30GHz,x86_64,3.13.18,1000
+"EKF, 3RC (calibrated)",0.06338100047287298,0.12048040019180917,200.63671875,1941,43.0478515625,cloud-vm,Intel(R) Xeon(R) Processor @ 2.30GHz,x86_64,3.13.18,1000
+LSTM,0.23395950029225787,0.41913652967195975,690.8125,4769,21.2353515625,cloud-vm,Intel(R) Xeon(R) Processor @ 2.30GHz,x86_64,3.13.18,1000
+Transformer,0.2867299999707029,0.5272726297698683,686.66015625,17697,77.6533203125,cloud-vm,Intel(R) Xeon(R) Processor @ 2.30GHz,x86_64,3.13.18,1000

@@ -49,6 +49,8 @@ class Perturbation:
     i_bias       : A, constant offset added to measured current
     t_noise_std  : degC, white Gaussian noise on temperature
     soc0_error   : SoC fraction added to the estimator's initial SoC (not to data)
+    start_s      : estimation starts this many seconds into the record (the cell
+                   is then under load and not at rest), 0 = from the beginning
     """
 
     name: str = "nominal"
@@ -57,6 +59,7 @@ class Perturbation:
     i_bias: float = 0.0
     t_noise_std: float = 0.0
     soc0_error: float = 0.0
+    start_s: int = 0
 
     def apply(self, voltage, current, temp, seed: int = 0):
         rng = np.random.default_rng(seed)

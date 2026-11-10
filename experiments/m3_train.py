@@ -42,13 +42,15 @@ def main():
     ap.add_argument("--threads", type=int, default=0)
     ap.add_argument("--noise", type=float, nargs=3, default=(0.0, 0.0, 0.0), metavar=("V", "A", "degC"))
     ap.add_argument("--bias", type=float, default=0.0, help="std of per-window current offset, A")
+    ap.add_argument("--causal", action="store_true",
+                    help="Transformer only: causal attention with a SoC target at the end of every patch")
     args = ap.parse_args()
     if args.threads:
         torch.set_num_threads(args.threads)
 
     tr, va = as_cycles(load_split("train")), as_cycles(load_split("val"))
     print(f"train {len(tr)} cycles, {sum(len(c['y']) for c in tr)} samples; val {len(va)} cycles", flush=True)
-    kw = {"patch": args.patch} if args.model == "transformer" else {}
+    kw = {"patch": args.patch, "causal": args.causal} if args.model == "transformer" else {}
     meta = train(tr, va, ROOT / "results" / "models" / args.name, model_name=args.model, model_kwargs=kw,
                  window=args.window, stride=args.stride, batch_size=args.batch_size, lr=args.lr,
                  max_epochs=args.epochs, patience=args.patience, seed=args.seed,
