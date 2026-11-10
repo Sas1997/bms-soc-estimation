@@ -127,6 +127,38 @@ Compute cost is measured sample by sample with the streaming estimators in `src/
 python experiments/m4_cost.py --label raspberry-pi
 ```
 
+## Cell balancing (pack simulation)
+
+A stretch goal: what passive and active balancing do for a small series pack built from the identified cell model. This is a simulation with **assumed** cell-to-cell variation; the dataset contains one cell. Code: `src/socest/pack.py`, `experiments/m6_balancing.py`. Full tables: [results/tables/m6_balancing.md](results/tables/m6_balancing.md).
+
+![Cell balancing simulation](results/figures/balancing.png)
+
+**Setup.** 200 packs of 4 cells in series, each cell the selected 3RC model at 25 °C (2.78 Ah nominal). Per cell: initial SoC 0.90 + N(0, 2 points), capacity ±1.5 % (1 σ), every resistance ±5 % (1 σ), seed 7. Median initial SoC spread (max minus min) in a pack: 3.8 points. Circuits, at matched current drawn from the donor cell:
+
+| Circuit | Model | Settings |
+|:--|:--|:--|
+| Passive | shunt resistor per cell, on for cells above the pack minimum | 20 Ω, about 0.2 A at 4 V |
+| Active, adjacent cell-to-cell | bidirectional converter between each pair of neighbours (N - 1 converters) | 0.2 A, 85 % efficiency |
+| Active, cell-to-pack | converter per cell, cells above the pack mean feed the whole string | 0.2 A, 85 % efficiency |
+
+Topology classes follow Daowd et al. (2011) and Gallardo-Lozano et al. (2014). The converters are averaged models with constant efficiency; the 85 % and 0.2 A values are assumptions, and efficiency is swept below. Balancing decisions use SoC.
+
+**Results.**
+
+| | Passive | Active, adjacent | Active, cell-to-pack |
+|:--|--:|--:|--:|
+| Rest: time to reach 0.5 points spread (median, h) | 0.45 | 0.25 | 0.46 |
+| Rest: energy lost (median, Wh) | 0.79 | 0.08 | 0.11 |
+| Rest: energy lost (median, % of stored) | 2.15 | 0.22 | 0.30 |
+| UDDS discharge to 2.8 V, balancing during discharge: energy delivered vs no balancing (median) | -1.3 % | +1.6 % | +1.5 % |
+| String of 12 cells, rest: time (median, h) | 0.98 | 0.56 | 0.81 |
+
+1. **Active balancing loses about a tenth of the energy of passive balancing** to equalise a resting pack (0.08 to 0.11 Wh against 0.79 Wh), at the same or shorter balancing time. Passive balancing works by burning the excess charge of every cell above the lowest one.
+2. **Passive balancing during discharge makes things worse** (-1.3 % energy delivered): it drains the strong cells while the weakest cell sets the cut-off. That is why passive balancing is normally done at the end of charge.
+3. **Most of the benefit here comes from where the pack is balanced, not from the circuit.** Starting the discharge top-balanced, a state any of the three circuits can reach during charging, delivers +3.3 % (median). Adding active adjacent balancing during discharge on top raises that to +4.3 %. The extra 1 point is the part only active balancing can recover: capacity mismatch, which no amount of balancing at full charge removes. With ±1.5 % capacity spread it is small; this study did not vary the capacity spread.
+4. **Converter efficiency matters less than expected for discharge gain:** from 70 % to 95 % efficiency the median gain of adjacent balancing goes from +1.2 % to +1.7 %.
+5. **Balancing is only as good as the SoC estimate it acts on.** If each cell's SoC estimate carries an independent error of 1 point (1 σ), every circuit stops with a true spread of about 2 points (median; 3.1 points at the 90th percentile), four times the 0.5-point target. Balancing to 0.5 points needs cell-to-cell estimation differences well below 0.5 point. Errors common to all cells, for example from the cell model or temperature, cancel here; only the differences between cells matter.
+
 ## Reproduce
 
 Python 3.13 with the pinned packages in `requirements.txt`.
@@ -140,7 +172,7 @@ python run_all.py                  # also retrains the six network candidates, a
 python -m pytest -q                # unit tests
 ```
 
-`run_all.py` downloads the data, builds the Parquet files and the data card, identifies and selects the cell model, tunes the EKF, selects the networks, evaluates, measures cost and draws the figure. Each step is a standalone script (list in `run_all.py`). `make results` and `make all` wrap the same two commands.
+`run_all.py` downloads the data, builds the Parquet files and the data card, identifies and selects the cell model, tunes the EKF, selects the networks, evaluates, measures cost, draws the figure and runs the balancing simulation. Each step is a standalone script (list in `run_all.py`). `make results` and `make all` wrap the same two commands.
 
 Random seeds are fixed. The model identification, EKF and evaluation are deterministic. Network training is seeded and single-threaded, but retrained weights can differ slightly between PyTorch builds and CPUs, so the committed weights are the reference for the numbers above.
 
@@ -149,11 +181,13 @@ Random seeds are fixed. The model identification, EKF and evaluation are determi
 ```
 data/           download.py, prepare.py, DATA_CARD.md (no raw data)
 src/socest/     ocv, ecm, params, identify, characterize, kalman, coulomb, thermal,
-                estimators, streaming, metrics, resample, split, cycles, cell
+                estimators, streaming, metrics, resample, split, cycles, cell, pack
 src/socest/ml/  data, models, train
-experiments/    m2_* cell model, m3_* EKF tuning and networks, m4_* evaluation
+experiments/    m2_* cell model, m3_* EKF tuning and networks, m4_* evaluation,
+                m6_balancing pack simulation
 results/        figures, tables, characterization (identified model), models (weights)
-tests/          unit tests: ECM, EKF, identification, loader, resampler, networks, streaming
+tests/          unit tests: ECM, EKF, identification, loader, resampler, networks,
+                streaming, pack and balancing circuits
 run_all.py      one-command reproduction
 ```
 
@@ -171,12 +205,13 @@ run_all.py      one-command reproduction
 - **The 40 °C data is incomplete**: three training cycles and no validation cycles.
 - **Cost was measured on a cloud virtual machine only.** Raspberry Pi numbers are not yet in the table.
 - **No UKF** and no adaptive filter were implemented.
+- **The balancing study is a simulation with assumed cell-to-cell variation**, at one temperature, with averaged converter models (constant efficiency, no switching ripple, no standby consumption) and no thermal model of the bleed resistors. It ranks the circuits and shows the mechanisms; it does not predict the numbers of a specific pack.
 
 ## Next steps
 
 - **Thermal sensing.** The largest remaining model error is in the cold, where the cell self-heats and one external temperature is a poor proxy for the temperature the electrochemistry sees. An internal temperature measurement, for example from fiber Bragg grating sensors embedded in a pack, would replace the fitted thermal gain with a measured input and allow a proper electro-thermal model.
 - **Edge and cloud demo.** Run the streaming EKF on a Raspberry Pi with replayed measurements and stream estimates to a cloud dashboard, the architecture of a cloud-connected BMS. The streaming estimators are already in place.
-- **Active cell balancing.** Build a small series pack from the identified cell model and compare passive and active balancing by balancing time and energy loss. Pack-level SoC estimates from this repository are the input a balancing controller needs.
+- **Active cell balancing on hardware.** The simulation above ranks the circuits; the next step is a prototype adjacent or cell-to-pack balancer on a small pack, driven by per-cell SoC estimates, to measure real converter efficiency and to test balancing on estimated rather than true SoC, where only cell-to-cell estimation differences matter.
 - **A second cell.** Repeat on the Samsung INR21700 30T dataset from the same laboratory (same protocol) to test how each method transfers to a new cell.
 - **State of health**, and a hybrid estimator that uses a network to correct the EKF's model error.
 
@@ -186,6 +221,8 @@ run_all.py      one-command reproduction
 - G. L. Plett, "Extended Kalman filtering for battery management systems of LiPB-based HEV battery packs: Part 3. State and parameter estimation," *Journal of Power Sources*, vol. 134, pp. 277-292, 2004.
 - G. L. Plett, *Battery Management Systems, Volume I: Battery Modeling*. Artech House, 2015.
 - A. J. Bard and L. R. Faulkner, *Electrochemical Methods: Fundamentals and Applications*, 2nd ed. Wiley, 2001. (Butler-Volmer equation)
+- M. Daowd, N. Omar, P. Van Den Bossche, J. Van Mierlo, "Passive and active battery balancing comparison based on MATLAB simulation," *IEEE Vehicle Power and Propulsion Conference (VPPC)*, 2011.
+- J. Gallardo-Lozano, E. Romero-Cadaval, M. I. Milanes-Montero, M. A. Guerrero-Martinez, "Battery equalization active methods," *Journal of Power Sources*, vol. 246, pp. 934-949, 2014. doi:10.1016/j.jpowsour.2013.08.026
 - A. Vaswani et al., "Attention is all you need," *Advances in Neural Information Processing Systems*, 2017.
 - Y. Nie, N. H. Nguyen, P. Sinthong, J. Kalagnanam, "A time series is worth 64 words: long-term forecasting with Transformers," *ICLR*, 2023. (patch embedding)
 - E. Chemali, P. J. Kollmeyer, M. Preindl, R. Ahmed, A. Emadi, "Long short-term memory networks for accurate state-of-charge estimation of Li-ion batteries," *IEEE Transactions on Industrial Electronics*, vol. 65, no. 8, pp. 6730-6739, 2018.

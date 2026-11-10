@@ -17,6 +17,7 @@ Steps (each is a standalone script and can be run on its own):
  10. experiments/m4_evaluate.py        test-set metrics and robustness cases
  11. experiments/m4_cost.py            time per step and memory on this machine
  12. experiments/m4_figures.py         headline figure
+ 13. experiments/m6_balancing.py       passive vs active cell balancing (pack simulation)
 """
 
 from __future__ import annotations
@@ -67,6 +68,7 @@ def main():
         run(f"experiments/{s}.py")
     run("experiments/m4_cost.py", "--label", args.cost_label)
     run("experiments/m4_figures.py")
+    run("experiments/m6_balancing.py")
     print("\nAll results are in results/. Summary: results/tables/m4_summary.md, figure: results/figures/headline.png")
 
 
