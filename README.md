@@ -124,8 +124,27 @@ The networks have no initial state, so a wrong initial SoC at rest does not affe
 Compute cost is measured sample by sample with the streaming estimators in `src/socest/streaming.py`, which reproduce the batch results exactly (checked by a unit test). To measure another machine, including a Raspberry Pi:
 
 ```
-python experiments/m4_cost.py --label raspberry-pi
+python experiments/m4_cost.py --label raspberry-pi-5
 ```
+
+On a device without PyTorch the networks are measured as ONNX models in ONNX Runtime, which is how they run in the edge demo below. On the cloud virtual machine ONNX Runtime halves the networks' time per step (LSTM 0.30 to 0.14 ms, Transformer 0.35 to 0.18 ms) and cuts the process's peak memory from about 680 MB to 220 MB.
+
+## Edge and cloud demo (Raspberry Pi)
+
+A small version of a cloud-connected BMS: estimation on an edge device, monitoring in the cloud. Setup guide: [demo/README.md](demo/README.md).
+
+```
+ Raspberry Pi 5                         HiveMQ Cloud (free)              Browser
+ demo/edge.py                           MQTT broker                      docs/index.html
+ replay -> EKF, LSTM, Transformer, CC   ---- MQTT over TLS, 8883 ---->   ---- secure WebSocket, 8884 ---->
+ local log in demo/runs/                retained: meta, history, summary  live charts and metrics
+```
+
+- **Edge** (`demo/edge.py`): replays a test cycle one sample at a time, as if from a live cell, and runs the calibrated EKF, the LSTM, the Transformer and coulomb counting on every sample. The EKF and coulomb counting can start with a wrong SoC (20 points by default) to show recovery. Every second it publishes the new samples, estimates and per-step compute time; every 30 s a retained, downsampled history, so a viewer who opens the dashboard mid-run sees the whole run. The broker credentials stay on the device.
+- **Networks without PyTorch.** The PyPI build of PyTorch for Linux ARM64 is 484 MB and depends on CUDA libraries a Pi cannot use. The selected networks are exported to ONNX (38 kB and 236 kB) and run in ONNX Runtime (a 23 MB package); the exported models reproduce PyTorch to within 5 × 10⁻⁷ SoC on every sample of a test cycle ([results/tables/m5_onnx_export.md](results/tables/m5_onnx_export.md)).
+- **Data on the device.** Three test cycles at 1 Hz ship in `demo/replay/` (25 °C UDDS, -20 °C UDDS, 10 °C US06), a small attributed excerpt of the dataset under its CC BY 4.0 licence, so the Pi needs neither the raw data nor the processing pipeline.
+- **Cloud** (`docs/index.html`): a static page served by GitHub Pages that subscribes with a read-only credential and plots SoC, SoC error, voltage, current and temperature, with a metrics table (RMSE, maximum error, compute time per step on the device).
+- **Tested** end to end in this repository against a local MQTT broker (TCP and WebSocket listeners), with the dashboard in headless Chrome: live updates, joining mid-run, and opening after the run from retained messages. The install was rehearsed in a clean environment with only `demo/requirements-pi.txt` (no PyTorch, no dataset): 47 tests pass.
 
 ## Cell balancing (pack simulation)
 
@@ -172,7 +191,7 @@ python run_all.py                  # also retrains the six network candidates, a
 python -m pytest -q                # unit tests
 ```
 
-`run_all.py` downloads the data, builds the Parquet files and the data card, identifies and selects the cell model, tunes the EKF, selects the networks, evaluates, measures cost, draws the figure and runs the balancing simulation. Each step is a standalone script (list in `run_all.py`). `make results` and `make all` wrap the same two commands.
+`run_all.py` downloads the data, builds the Parquet files and the data card, identifies and selects the cell model, tunes the EKF, selects the networks, exports them to ONNX, evaluates, measures cost, draws the figure and runs the balancing simulation. Each step is a standalone script (list in `run_all.py`). `make results` and `make all` wrap the same two commands.
 
 Random seeds are fixed. The model identification, EKF and evaluation are deterministic. Network training is seeded and single-threaded, but retrained weights can differ slightly between PyTorch builds and CPUs, so the committed weights are the reference for the numbers above.
 
@@ -181,13 +200,16 @@ Random seeds are fixed. The model identification, EKF and evaluation are determi
 ```
 data/           download.py, prepare.py, DATA_CARD.md (no raw data)
 src/socest/     ocv, ecm, params, identify, characterize, kalman, coulomb, thermal,
-                estimators, streaming, metrics, resample, split, cycles, cell, pack
+                estimators, streaming, onnx_estimator, replay, metrics, resample,
+                split, cycles, cell, pack
 src/socest/ml/  data, models, train
 experiments/    m2_* cell model, m3_* EKF tuning and networks, m4_* evaluation,
-                m6_balancing pack simulation
-results/        figures, tables, characterization (identified model), models (weights)
+                m5_* ONNX and replay export, m6_balancing pack simulation
+demo/           edge node (edge.py), setup guide, Pi requirements, replay excerpt
+docs/           live dashboard (GitHub Pages)
+results/        figures, tables, characterization (identified model), models (weights, ONNX)
 tests/          unit tests: ECM, EKF, identification, loader, resampler, networks,
-                streaming, pack and balancing circuits
+                streaming, edge node, pack and balancing circuits
 run_all.py      one-command reproduction
 ```
 
@@ -203,14 +225,15 @@ run_all.py      one-command reproduction
 - **The selected EKF settings sit at the edge of the search grid** for one parameter (`q_v`) with the calibrated model and for all three with the 2RC model.
 - **Networks were trained with one seed**, so seed-to-seed spread is not reported.
 - **The 40 °C data is incomplete**: three training cycles and no validation cycles.
-- **Cost was measured on a cloud virtual machine only.** Raspberry Pi numbers are not yet in the table.
+- **Cost was measured on a cloud virtual machine only.** Raspberry Pi 5 numbers are not yet in the table; step 5 of [demo/README.md](demo/README.md) produces them.
+- **The edge demo replays recorded data.** There is no live cell or sensing hardware, and the reference SoC on the dashboard is the laboratory's.
 - **No UKF** and no adaptive filter were implemented.
 - **The balancing study is a simulation with assumed cell-to-cell variation**, at one temperature, with averaged converter models (constant efficiency, no switching ripple, no standby consumption) and no thermal model of the bleed resistors. It ranks the circuits and shows the mechanisms; it does not predict the numbers of a specific pack.
 
 ## Next steps
 
 - **Thermal sensing.** The largest remaining model error is in the cold, where the cell self-heats and one external temperature is a poor proxy for the temperature the electrochemistry sees. An internal temperature measurement, for example from fiber Bragg grating sensors embedded in a pack, would replace the fitted thermal gain with a measured input and allow a proper electro-thermal model.
-- **Edge and cloud demo.** Run the streaming EKF on a Raspberry Pi with replayed measurements and stream estimates to a cloud dashboard, the architecture of a cloud-connected BMS. The streaming estimators are already in place.
+- **A live cell at the edge.** Replace the replay in `demo/edge.py` with a cell and voltage, current and temperature sensing connected to the Pi, so the same estimators and dashboard run on live measurements.
 - **Active cell balancing on hardware.** The simulation above ranks the circuits; the next step is a prototype adjacent or cell-to-pack balancer on a small pack, driven by per-cell SoC estimates, to measure real converter efficiency and to test balancing on estimated rather than true SoC, where only cell-to-cell estimation differences matter.
 - **A second cell.** Repeat on the Samsung INR21700 30T dataset from the same laboratory (same protocol) to test how each method transfers to a new cell.
 - **State of health**, and a hybrid estimator that uses a network to correct the EKF's model error.
@@ -229,7 +252,7 @@ run_all.py      one-command reproduction
 
 ## License
 
-Code: AGPL-3.0 (see [LICENSE](LICENSE)). The dataset is the property of its authors and is distributed by them under CC BY 4.0; it is downloaded from Mendeley Data and not redistributed here.
+Code: AGPL-3.0 (see [LICENSE](LICENSE)). The dataset is the property of its authors and is distributed by them under CC BY 4.0; it is downloaded from Mendeley Data and not redistributed here, except three test cycles resampled to 1 Hz in `demo/replay/`, redistributed under the same licence with attribution and a description of the changes ([demo/replay/README.md](demo/replay/README.md)).
 
 ## Citation
 
