@@ -30,6 +30,37 @@ TOL = 1e-4
 OPSET = 18
 
 
+def strip_debug_metadata(path: Path):
+    """Remove the exporter's per-node debug metadata (Python stack traces with local
+    file paths, FX node names). Inference does not use it; the file gets smaller and
+    no longer depends on the machine it was exported on."""
+    import onnx
+
+    m = onnx.load(str(path))
+
+    def clean(graph):
+        for node in graph.node:
+            del node.metadata_props[:]
+            node.doc_string = ""
+            for attr in node.attribute:
+                if attr.type == onnx.AttributeProto.GRAPH:
+                    clean(attr.g)
+                for g in attr.graphs:
+                    clean(g)
+        graph.doc_string = ""
+
+    clean(m.graph)
+    for f in m.functions:
+        for node in f.node:
+            del node.metadata_props[:]
+            node.doc_string = ""
+        del f.metadata_props[:]
+    del m.metadata_props[:]
+    m.doc_string = ""
+    onnx.checker.check_model(m)
+    onnx.save(m, str(path))
+
+
 def export(folder: str):
     est = NeuralEstimator(folder)
     model = est.model.eval()
@@ -38,6 +69,7 @@ def export(folder: str):
     torch.onnx.export(model, (x,), str(path), input_names=["x"], output_names=["soc"],
                       dynamic_shapes={"x": {0: torch.export.Dim("batch", min=1, max=4096)}},
                       opset_version=OPSET, dynamo=True, external_data=False)
+    strip_debug_metadata(path)
     return est, path
 
 
