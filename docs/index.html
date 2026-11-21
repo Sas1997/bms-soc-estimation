@@ -1,0 +1,399 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Live SoC Dashboard</title>
+<meta name="description" content="Live state-of-charge estimates streamed over MQTT from a Raspberry Pi edge node (bms-soc-estimation).">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/uplot@1.6.32/dist/uPlot.min.css">
+<style>
+  :root {
+    color-scheme: light;
+    --page: #f9f9f7;
+    --surface-1: #fcfcfb;
+    --text-primary: #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted: #898781;
+    --grid: #e1e0d9;
+    --axis: #c3c2b7;
+    --border: rgba(11, 11, 11, 0.10);
+    --series-ref: #0b0b0b;
+    --series-ekf: #2a78d6;
+    --series-lstm: #1baf7a;
+    --series-transformer: #eda100;
+    --series-cc: #898781;
+    --good: #0ca30c;
+    --critical: #d03b3b;
+    --warning: #fab219;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --page: #0d0d0d;
+      --surface-1: #1a1a19;
+      --text-primary: #f0efec;
+      --text-secondary: #c3c2b7;
+      --grid: #2c2c2a;
+      --axis: #383835;
+      --border: rgba(255, 255, 255, 0.10);
+      --series-ref: #f0efec;
+      --series-ekf: #3987e5;
+      --series-lstm: #199e70;
+      --series-transformer: #c98500;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --page: #0d0d0d;
+    --surface-1: #1a1a19;
+    --text-primary: #f0efec;
+    --text-secondary: #c3c2b7;
+    --grid: #2c2c2a;
+    --axis: #383835;
+    --border: rgba(255, 255, 255, 0.10);
+    --series-ref: #f0efec;
+    --series-ekf: #3987e5;
+    --series-lstm: #199e70;
+    --series-transformer: #c98500;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--page); color: var(--text-primary);
+    font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 1240px; margin: 0 auto; padding: 24px 16px 48px; }
+  header h1 { font-size: 22px; font-weight: 650; margin: 0 0 6px; letter-spacing: -0.01em; }
+  header p { margin: 0; color: var(--text-secondary); max-width: 78ch; }
+  header a { color: inherit; }
+  .status { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0 18px; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 7px; padding: 5px 11px;
+    border: 1px solid var(--border); border-radius: 999px; background: var(--surface-1);
+    color: var(--text-secondary); font-size: 13px; white-space: nowrap;
+  }
+  .chip b { color: var(--text-primary); font-weight: 600; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--text-muted); flex: none; }
+  .dot.good { background: var(--good); }
+  .dot.critical { background: var(--critical); }
+  .dot.warning { background: var(--warning); }
+  .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
+  .tiles { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin-bottom: 12px; }
+  .tile .name { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--text-secondary); }
+  .swatch { width: 14px; height: 3px; border-radius: 2px; flex: none; }
+  .swatch.dashed { background: repeating-linear-gradient(90deg, var(--series-cc) 0 5px, transparent 5px 8px) !important; }
+  .tile .value { font-size: 30px; font-weight: 600; letter-spacing: -0.02em; margin-top: 2px; }
+  .tile .value small { font-size: 16px; font-weight: 500; color: var(--text-secondary); }
+  .tile .sub { font-size: 13px; color: var(--text-secondary); }
+  .grid2 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+  .chart-card { margin-bottom: 12px; }
+  .chart-card h2 { font-size: 14px; font-weight: 600; margin: 0 0 2px; }
+  .chart-card .note { font-size: 12.5px; color: var(--text-secondary); margin: 0 0 6px; }
+  .plot { width: 100%; min-height: 120px; }
+  .u-legend { color: var(--text-secondary); font-size: 12.5px; text-align: left; }
+  .u-legend .u-value { color: var(--text-primary); font-variant-numeric: tabular-nums; }
+  .u-legend th { font-weight: 500; }
+  .u-legend .u-marker { width: 14px; height: 3px; border-width: 0; }
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { padding: 8px 10px; text-align: right; border-bottom: 1px solid var(--grid); }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--text-secondary); font-weight: 500; }
+  td { font-variant-numeric: tabular-nums; }
+  .setup { display: none; }
+  .setup.show { display: block; margin-bottom: 14px; }
+  .setup code { font-size: 13px; }
+  footer { margin-top: 18px; color: var(--text-secondary); font-size: 13px; }
+  footer p { margin: 4px 0; max-width: 100ch; }
+  footer a { color: inherit; }
+  @media (max-width: 900px) {
+    .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .tiles .tile:first-child { grid-column: 1 / -1; }
+    .grid2 { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Live state-of-charge estimation at the edge</h1>
+    <p>A single-board computer replays a laboratory drive cycle as if it came from a live Li-ion cell, estimates
+      state of charge on the device, and streams measurements and estimates here over MQTT.
+      Code and method: <a href="https://github.com/SAS1997/bms-soc-estimation">bms-soc-estimation</a>.</p>
+  </header>
+
+  <div class="status" aria-live="polite">
+    <span class="chip"><span class="dot" id="dot-broker"></span>Cloud broker: <b id="st-broker">connecting</b></span>
+    <span class="chip"><span class="dot" id="dot-edge"></span>Edge device: <b id="st-edge">unknown</b></span>
+    <span class="chip">Cycle: <b id="st-cycle">-</b></span>
+    <span class="chip">Replay speed: <b id="st-speed">-</b></span>
+    <span class="chip">Progress: <b id="st-progress">-</b></span>
+    <span class="chip">Device CPU: <b id="st-cpu">-</b></span>
+    <span class="chip">Last data: <b id="st-age">-</b></span>
+  </div>
+
+  <div class="card setup" id="setup">
+    <b>Not configured.</b> Fill in <code>docs/config.js</code> with the HiveMQ Cloud cluster URL, the
+    subscribe-only username and password, and the topic, as described in <code>demo/README.md</code>.
+  </div>
+
+  <section class="tiles" aria-label="Current state of charge">
+    <div class="card tile"><div class="name"><span class="swatch" style="background:var(--series-ref)"></span>Reference SoC</div>
+      <div class="value" id="v-ref">-</div><div class="sub">laboratory coulomb counting</div></div>
+    <div class="card tile"><div class="name"><span class="swatch" style="background:var(--series-ekf)"></span>EKF, 3RC (calibrated)</div>
+      <div class="value" id="v-ekf">-</div><div class="sub" id="e-ekf">-</div></div>
+    <div class="card tile"><div class="name"><span class="swatch" style="background:var(--series-lstm)"></span>LSTM</div>
+      <div class="value" id="v-lstm">-</div><div class="sub" id="e-lstm">-</div></div>
+    <div class="card tile"><div class="name"><span class="swatch" style="background:var(--series-transformer)"></span>Transformer</div>
+      <div class="value" id="v-transformer">-</div><div class="sub" id="e-transformer">-</div></div>
+    <div class="card tile"><div class="name"><span class="swatch dashed"></span>Coulomb counting</div>
+      <div class="value" id="v-cc">-</div><div class="sub" id="e-cc">-</div></div>
+  </section>
+
+  <section class="card chart-card">
+    <h2>State of charge (%)</h2>
+    <p class="note" id="note-soc">The EKF and coulomb counting start with a wrong initial SoC; the networks need no initial state.</p>
+    <div class="plot" id="p-soc"></div>
+  </section>
+  <section class="card chart-card">
+    <h2>SoC error, estimate minus reference (percentage points)</h2>
+    <p class="note">Coulomb counting is left out of this chart because its error stays at the initial offset; see the table.</p>
+    <div class="plot" id="p-err"></div>
+  </section>
+  <div class="grid2">
+    <section class="card chart-card"><h2>Terminal voltage (V)</h2><div class="plot" id="p-v"></div></section>
+    <section class="card chart-card"><h2>Current (A), positive = discharge</h2><div class="plot" id="p-i"></div></section>
+    <section class="card chart-card"><h2>Cell temperature (°C)</h2><div class="plot" id="p-t"></div></section>
+  </div>
+
+  <section class="card chart-card">
+    <h2 id="tbl-title">Run metrics</h2>
+    <p class="note">SoC error against the reference over the samples processed so far, and compute time per 1 Hz update measured on the edge device.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Estimator</th><th>RMSE (points)</th><th>Max error (points)</th><th>Now (points)</th><th>ms per step, median</th><th>ms per step, 99th pct</th></tr></thead>
+      <tbody id="tbl"></tbody>
+    </table></div>
+  </section>
+
+  <footer>
+    <p id="ft-meta"></p>
+    <p>Data: P. Kollmeyer, M. Naguib, M. Skells, LG 18650HG2 Li-ion Battery Data, Mendeley Data, V2, 2020,
+      doi:10.17632/b5mj79w5w9.2, CC BY 4.0 (excerpt resampled to 1 Hz). All replayed cycles are test cycles that
+      no estimator was fitted or tuned on.</p>
+  </footer>
+</main>
+
+<script src="config.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/uplot@1.6.32/dist/uPlot.iife.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mqtt@5.16.1/dist/mqtt.min.js"></script>
+<script>
+(() => {
+  "use strict";
+  const KEYS = ["ekf", "lstm", "transformer", "cc"];
+  const LABEL = { ref: "Reference", ekf: "EKF", lstm: "LSTM", transformer: "Transformer", cc: "Coulomb counting" };
+  const FIELDS = ["k", "t", "v", "i", "T", "ref", "ekf_sd", ...KEYS];
+
+  // ---------------------------------------------------------------- config
+  const cfg = Object.assign({ port: 8884, path: "/mqtt", topic: "bms-soc-estimation/demo", tls: true }, window.BMS_CONFIG || {});
+  const q = new URLSearchParams(location.search);
+  for (const [k, key] of [["host", "host"], ["port", "port"], ["user", "username"], ["pass", "password"], ["topic", "topic"], ["path", "path"]]) {
+    if (q.get(k)) cfg[key] = q.get(k);
+  }
+  if (q.get("tls") === "0") cfg.tls = false;
+  const prefix = String(cfg.topic).replace(/\/+$/, "");
+
+  // ---------------------------------------------------------------- state
+  const st = { meta: null, runId: null, online: null, summary: null, stats: null, lastData: 0 };
+  let D = emptyStore();
+  function emptyStore() { const s = {}; for (const f of FIELDS) s[f] = []; return s; }
+  const $ = (id) => document.getElementById(id);
+
+  function resetRun(runId) { st.runId = runId; st.summary = null; st.stats = null; D = emptyStore(); dirty = true; }
+
+  function append(block) {
+    const last = D.k.length ? D.k[D.k.length - 1] : -1;
+    for (let j = 0; j < block.k.length; j++) {
+      if (block.k[j] <= last) continue;
+      for (const f of FIELDS) D[f].push(block[f] ? block[f][j] : null);
+    }
+  }
+
+  function merge(block) {
+    // History is downsampled; telemetry is dense. Keep one point per sample index, in order.
+    const rows = new Map();
+    const add = (src) => { for (let j = 0; j < src.k.length; j++) { const r = {}; for (const f of FIELDS) r[f] = src[f] ? src[f][j] : null; rows.set(src.k[j], r); } };
+    add(block); add(D);
+    const keys = [...rows.keys()].sort((a, b) => a - b);
+    const out = emptyStore();
+    for (const k of keys) { const r = rows.get(k); for (const f of FIELDS) out[f].push(r[f]); }
+    D = out;
+  }
+
+  // ---------------------------------------------------------------- charts
+  const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  let charts = {};
+  let dirty = false;
+
+  function axis(label) {
+    return { label, stroke: css("--text-secondary"), labelSize: 18, size: 46, font: "12px system-ui, sans-serif",
+      labelFont: "12px system-ui, sans-serif", grid: { stroke: css("--grid"), width: 1 }, ticks: { stroke: css("--axis"), width: 1, size: 4 } };
+  }
+  const fmt = (d) => (u, v) => (v == null ? "-" : v.toFixed(d));
+
+  function line(key, label, d, extra = {}) {
+    return Object.assign({ label, stroke: css(`--series-${key}`), width: 2, points: { show: false }, value: fmt(d) }, extra);
+  }
+
+  function makeChart(el, height, yLabel, series, range) {
+    const opts = {
+      width: Math.max(el.clientWidth, 280), height,
+      cursor: { sync: { key: "bms" }, points: { size: 8 } },
+      legend: { live: true },
+      scales: { x: { time: false }, y: range ? { range } : {} },
+      axes: [axis("Cycle time (min)"), axis(yLabel)],
+      series: [{ label: "Time (min)", value: fmt(1) }, ...series],
+    };
+    const u = new uPlot(opts, [[], ...series.map(() => [])], el);
+    new ResizeObserver(() => u.setSize({ width: Math.max(el.clientWidth, 280), height })).observe(el);
+    return u;
+  }
+
+  function buildCharts() {
+    for (const c of Object.values(charts)) c.destroy();
+    for (const id of ["p-soc", "p-err", "p-v", "p-i", "p-t"]) $(id).innerHTML = "";
+    const errRange = (u, min, max) => { const m = Math.max(5, Math.ceil(Math.max(Math.abs(min), Math.abs(max)))); return [-m, m]; };
+    charts = {
+      soc: makeChart($("p-soc"), 300, "SoC (%)", [
+        line("ref", "Reference", 1, { width: 2.5 }), line("ekf", "EKF", 1), line("lstm", "LSTM", 1),
+        line("transformer", "Transformer", 1), line("cc", "Coulomb counting", 1, { dash: [7, 5] })]),
+      err: makeChart($("p-err"), 230, "Error (points)", [line("ekf", "EKF", 2), line("lstm", "LSTM", 2),
+        line("transformer", "Transformer", 2)], errRange),
+      v: makeChart($("p-v"), 200, "V", [line("ref", "Voltage", 3, { width: 1.25 })]),
+      i: makeChart($("p-i"), 200, "A", [line("ref", "Current", 2, { width: 1 })]),
+      t: makeChart($("p-t"), 200, "°C", [line("ref", "Temperature", 1, { width: 1.5 })]),
+    };
+    dirty = true;
+  }
+
+  function render() {
+    if (!dirty) return;
+    dirty = false;
+    const x = D.t.map((t) => t / 60);
+    const pct = (a) => a.map((v) => (v == null ? null : 100 * v));
+    const err = (key) => D[key].map((v, j) => (v == null || D.ref[j] == null ? null : 100 * (v - D.ref[j])));
+    charts.soc.setData([x, pct(D.ref), pct(D.ekf), pct(D.lstm), pct(D.transformer), pct(D.cc)]);
+    charts.err.setData([x, err("ekf"), err("lstm"), err("transformer")]);
+    charts.v.setData([x, D.v]);
+    charts.i.setData([x, D.i]);
+    charts.t.setData([x, D.T]);
+    renderTiles();
+  }
+
+  // ---------------------------------------------------------------- text
+  const f1 = (v) => (v == null ? "-" : v.toFixed(1));
+  const f2 = (v) => (v == null ? "-" : v.toFixed(2));
+  const f3 = (v) => (v == null ? "-" : v < 0.01 ? v.toFixed(4) : v.toFixed(3));
+  const signed = (v) => (v == null ? "-" : (v > 0 ? "+" : "") + v.toFixed(1));
+
+  function renderTiles() {
+    const n = D.k.length;
+    if (!n) return;
+    const ref = D.ref[n - 1];
+    $("v-ref").innerHTML = `${f1(100 * ref)}<small> %</small>`;
+    for (const key of KEYS) {
+      const v = D[key][n - 1];
+      $(`v-${key}`).innerHTML = v == null ? "-" : `${f1(100 * v)}<small> %</small>`;
+      $(`e-${key}`).textContent = v == null ? "-" : `error ${signed(100 * (v - ref))} points`;
+    }
+  }
+
+  function renderStats() {
+    const s = st.summary || st.stats;
+    if (!s) return;
+    const ms = s.ms || {};
+    $("tbl").innerHTML = KEYS.map((key) => {
+      const label = (st.meta && st.meta.labels && st.meta.labels[key]) || LABEL[key];
+      const m = ms[key] || {};
+      const now = st.stats && st.stats.now_err_pts ? st.stats.now_err_pts[key] : null;
+      return `<tr><td>${label}</td><td>${f2(s.rmse_pts[key])}</td><td>${f2(s.max_pts[key])}</td><td>${signed(now)}</td>` +
+             `<td>${f3(m.median)}</td><td>${f3(m.p99)}</td></tr>`;
+    }).join("");
+    $("tbl-title").textContent = st.summary && st.summary.run_id === st.runId
+      ? (st.summary.finished ? "Run metrics, completed run" : "Run metrics, stopped run") : "Run metrics, so far";
+    if (st.stats) {
+      $("st-progress").textContent = `${Math.round(100 * (st.stats.progress || 0))} %`;
+      $("st-cpu").textContent = st.stats.cpu_c == null ? "n/a" : `${st.stats.cpu_c} °C`;
+    }
+  }
+
+  function cycleName(c) {
+    const m = /^(n?)(\d+)degC_(\w+)$/.exec(c || "");
+    return m ? `${m[3]} at ${m[1] ? "-" : ""}${m[2]} °C` : c || "-";
+  }
+
+  function renderMeta() {
+    const m = st.meta;
+    if (!m) return;
+    $("st-cycle").textContent = cycleName(m.cycle) + (m.cycle && m.cycle.startsWith("10degC") ? " (held-out temperature)" : "");
+    $("st-speed").textContent = m.speed === 1 ? "real time (1 Hz)" : `${m.speed}x real time`;
+    $("note-soc").textContent = `The EKF and coulomb counting start ${m.soc_error_pts} points below the true SoC; ` +
+      "the networks need no initial state.";
+    $("ft-meta").textContent = `Run ${m.run_id} on ${m.device} (host ${m.host}), started ${m.started_utc}. ` +
+      `EKF model ${m.models.ekf}; networks ${m.models.lstm} and ${m.models.transformer} run with ONNX Runtime ${m.onnxruntime}; Python ${m.python}.`;
+  }
+
+  function setChip(dotId, textId, cls, text) {
+    $(dotId).className = "dot " + (cls || "");
+    $(textId).textContent = text;
+  }
+
+  function renderEdge() {
+    if (st.online === true) setChip("dot-edge", "st-edge", "good", (st.meta && st.meta.device) || "online");
+    else if (st.online === false) setChip("dot-edge", "st-edge", "critical", st.summary ? "offline, showing the last run" : "offline");
+  }
+
+  setInterval(() => {
+    if (!st.lastData) return;
+    const s = Math.round((Date.now() - st.lastData) / 1000);
+    $("st-age").textContent = s < 2 ? "now" : s < 120 ? `${s} s ago` : `${Math.round(s / 60)} min ago`;
+  }, 1000);
+  setInterval(render, 500);
+
+  // ---------------------------------------------------------------- MQTT
+  buildCharts();
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", buildCharts);
+
+  if (!cfg.host || !cfg.username || /your-/.test(cfg.host)) {
+    $("setup").classList.add("show");
+    setChip("dot-broker", "st-broker", "critical", "not configured");
+    return;
+  }
+  const url = `${cfg.tls ? "wss" : "ws"}://${cfg.host}:${cfg.port}${cfg.path}`;
+  const client = mqtt.connect(url, {
+    username: cfg.username, password: cfg.password, protocolVersion: 4, clean: true,
+    clientId: "bms-dash-" + Math.random().toString(16).slice(2, 10), reconnectPeriod: 4000, connectTimeout: 15000,
+  });
+  client.on("connect", () => {
+    setChip("dot-broker", "st-broker", "good", "connected");
+    client.subscribe(`${prefix}/#`, { qos: 1 });
+  });
+  client.on("reconnect", () => setChip("dot-broker", "st-broker", "warning", "reconnecting"));
+  client.on("close", () => setChip("dot-broker", "st-broker", "warning", "disconnected"));
+  client.on("error", (e) => setChip("dot-broker", "st-broker", "critical", "error: " + (e && e.message ? e.message : e)));
+
+  client.on("message", (topic, payload) => {
+    const sub = topic.slice(prefix.length + 1);
+    const text = payload.toString();
+    if (sub === "online") { st.online = text === "1"; renderEdge(); return; }
+    if (!text) return;                                  // cleared retained message
+    let msg;
+    try { msg = JSON.parse(text); } catch (e) { return; }
+    if (msg.run_id && msg.run_id !== st.runId && sub !== "summary") resetRun(msg.run_id);
+    if (sub === "meta") { st.meta = msg; renderMeta(); renderEdge(); }
+    else if (sub === "history") { merge(msg); if (msg.stats) st.stats = msg.stats; dirty = true; renderStats(); st.lastData = st.lastData || Date.now(); }
+    else if (sub === "telemetry") { append(msg); st.stats = msg.stats; st.lastData = Date.now(); dirty = true; renderStats(); }
+    else if (sub === "summary") { st.summary = msg; renderStats(); renderEdge(); }
+  });
+})();
+</script>
+</body>
+</html>

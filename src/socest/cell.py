@@ -41,7 +41,10 @@ def load_ocv(file: str, exclude=(HELD_OUT_FOLDER,)) -> OCVCurve:
 
 def capacity_fn(exclude=(HELD_OUT_FOLDER,)):
     """C/20 discharge capacity (Ah) as a function of temperature (linear interpolation, held at the ends)."""
-    cap = pd.read_csv(PROC / "capacity.csv", index_col=0)
+    # The copy in results/ is committed, so the model loads without the processed dataset
+    # (for example on a Raspberry Pi). It is written by experiments/m5_export_replay.py.
+    src = CHAR / "capacity.csv" if (CHAR / "capacity.csv").exists() else PROC / "capacity.csv"
+    cap = pd.read_csv(src, index_col=0)
     cap = cap.drop(index=[f for f in exclude if f in cap.index])
     temps = np.array([FOLDER_TEMPS[f] for f in cap.index])
     o = np.argsort(temps)

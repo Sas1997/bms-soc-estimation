@@ -18,6 +18,10 @@ Steps (each is a standalone script and can be run on its own):
  11. experiments/m4_cost.py            time per step and memory on this machine
  12. experiments/m4_figures.py         headline figure
  13. experiments/m6_balancing.py       passive vs active cell balancing (pack simulation)
+
+Edge demo files (run before step 8 and step 11, which use them):
+  experiments/m5_export_replay.py      demo replay excerpt and capacity table
+  experiments/m5_export_onnx.py        ONNX models of the selected networks
 """
 
 from __future__ import annotations
@@ -59,12 +63,12 @@ def main():
     if not args.skip_download:
         run("data/download.py")
     run("data/prepare.py")
-    for s in ("m2_characterize", "m2_calibrate_slow", "m2_select_ecm", "m2_validate"):
+    for s in ("m2_characterize", "m2_calibrate_slow", "m2_select_ecm", "m2_validate", "m5_export_replay"):
         run(f"experiments/{s}.py")
     if not args.skip_train:
         for cfg in TRAIN_RUNS:
             run("experiments/m3_train.py", *cfg, "--threads", "1", "--epochs", "40")
-    for s in ("m3_tune_ekf", "m3_select_nn", "m4_evaluate"):
+    for s in ("m3_tune_ekf", "m3_select_nn", "m5_export_onnx", "m4_evaluate"):
         run(f"experiments/{s}.py")
     run("experiments/m4_cost.py", "--label", args.cost_label)
     run("experiments/m4_figures.py")

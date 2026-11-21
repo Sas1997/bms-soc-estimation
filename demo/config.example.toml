@@ -1,0 +1,14 @@
+# Copy this file to demo/config.toml (which is never committed) and fill in the
+# values from your HiveMQ Cloud console. Use the credential with permission
+# "Publish and Subscribe" here; the dashboard uses a separate "Subscribe only" one.
+
+[broker]
+host = "your-cluster-id.s1.eu.hivemq.cloud"   # Cluster URL from the HiveMQ console
+port = 8883                                   # MQTT over TLS
+username = "your-publisher-username"
+password = "your-publisher-password"
+tls = true
+
+[demo]
+topic = "bms-soc-estimation/demo"             # must match docs/config.js
+device = "Raspberry Pi 5 (8 GB)"              # shown on the dashboard

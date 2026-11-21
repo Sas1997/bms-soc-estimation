@@ -17,3 +17,7 @@ checkpoints/
 .vscode/
 .idea/
 .DS_Store
+
+# Edge demo: broker credentials and local run logs stay on the device
+demo/config.toml
+demo/runs/

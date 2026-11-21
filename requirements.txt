@@ -1,5 +1,5 @@
 # Pinned versions used to produce the results in this repository (Python 3.13).
-# For CPU-only PyTorch on a laptop or Raspberry Pi, see https://pytorch.org/get-started/locally/
+# For the Raspberry Pi edge demo use demo/requirements-pi.txt instead (no PyTorch).
 numpy==2.5.3
 scipy==1.18.1
 pandas==3.0.5
@@ -9,3 +9,7 @@ h5py==3.16.0
 matplotlib==3.11.2
 tabulate==0.10.0
 pytest==9.1.1
+onnx==1.23.2
+onnxscript==0.7.2
+onnxruntime==1.31.0
+paho-mqtt==2.1.0

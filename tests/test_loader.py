@@ -3,12 +3,14 @@ File names are copied from the public Mendeley file listing (25degC and n20degC)
 
 from pathlib import Path
 
-import h5py
 import numpy as np
 import pytest
 from scipy.io import savemat
 
-from socest.datasets import lg_hg2
+# Skipped where h5py is not installed (for example on the Raspberry Pi edge device).
+h5py = pytest.importorskip("h5py")
+
+from socest.datasets import lg_hg2  # noqa: E402
 
 REAL_NAMES = [
     ("10-25-18_07.39 549_HPPC_25degC_LGHG2.mat", "549", "HPPC", "hppc"),
