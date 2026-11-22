@@ -144,7 +144,7 @@ A small version of a cloud-connected BMS: estimation on an edge device, monitori
 - **Networks without PyTorch.** The PyPI build of PyTorch for Linux ARM64 is 484 MB and depends on CUDA libraries a Pi cannot use. The selected networks are exported to ONNX (23 kB and 99 kB) and run in ONNX Runtime (a 23 MB package); the exported models reproduce PyTorch to within 5 × 10⁻⁷ SoC on every sample of a test cycle ([results/tables/m5_onnx_export.md](results/tables/m5_onnx_export.md)).
 - **Data on the device.** Three test cycles at 1 Hz ship in `demo/replay/` (25 °C UDDS, -20 °C UDDS, 10 °C US06), a small attributed excerpt of the dataset under its CC BY 4.0 licence, so the Pi needs neither the raw data nor the processing pipeline.
 - **Cloud** (`docs/index.html`): a static page served by GitHub Pages that subscribes with a read-only credential and plots SoC, SoC error, voltage, current and temperature, with a metrics table (RMSE, maximum error, compute time per step on the device).
-- **Tested** end to end in this repository against a local MQTT broker (TCP and WebSocket listeners), with the dashboard in headless Chrome: live updates, joining mid-run, and opening after the run from retained messages. The install was rehearsed in a clean environment with only `demo/requirements-pi.txt` (no PyTorch, no dataset): 59 tests pass.
+- **Tested** end to end in this repository against a local MQTT broker (TCP and WebSocket listeners), with the dashboard in headless Chrome: live updates, joining mid-run, and opening after the run from retained messages. The install was rehearsed in a clean environment with only `demo/requirements-pi.txt` (no PyTorch, no dataset): 66 tests pass.
 
 ## Smart battery over SMBus
 
@@ -166,7 +166,17 @@ Most commercial packs (laptops, power tools, e-bikes, medical and industrial dev
 | Vendor registers identified (quantity, scale and sign) | 48 of 48 code-cycle pairs, including a signed temperature below 0 °C |
 | Bus time per 1 Hz sample on the cloud VM (emulated) | 0.3 ms median for 5 registers |
 
-The live dashboard draws the pack gauge's SoC as an extra series when the source is a smart battery. On a real pack the gauge becomes the reference, and the EKF and the networks, which model an LG HG2 cell, only mean something if the pack is built from that cell; coulomb counting uses the pack's own full-charge capacity. Wiring and safety notes: [demo/README.md](demo/README.md#step-11-optional-read-a-real-smart-battery-over-smbus).
+### TI BQ27426: a system-side Impedance Track gauge
+
+The BQ27426 is a single-cell fuel gauge that sits on the device's board rather than in the pack. It runs TI's Impedance Track algorithm: OCV and resistance tables from one of three built-in chemistry profiles, coulomb counting, and learning of the cell's chemical capacity (Qmax) and resistance during use. In other words, a commercial version of this repository's physics-based approach, which makes it a natural baseline for the EKF and the networks on a live cell. `src/socest/bq27426.py` reads it; `demo/smbus_log.py --gauge bq27426` logs it; `demo/edge.py --source bq27426` streams it.
+
+- **Different interface from a smart battery:** I2C address 0x55 and TI's own register map (Voltage, AverageCurrent, Temperature, StateOfCharge, filtered and unfiltered capacities, StateOfHealth with its Qmax learning status, Flags), not SBS, and no PEC.
+- **Rate limit respected by design.** The manual says the host must not issue any standard command more than twice per second, or the gauge's watchdog can reset it. Every sample is one incremental read of registers 0x02-0x31, and the reader enforces at least 0.5 s between transfers (tested with a fake clock).
+- **Read-only.** Control() subcommands need a data write and are not used. The gauge's configuration (design capacity, chemistry profile) is set with TI's tools; for a 4.2 V cell such as the LG HG2 the matching built-in profile is CHEM_B (Chem ID 1202), which is generic, not fitted to that cell.
+- **Self-checks.** Each sample is checked for plausibility, and the log reports whether the current's sign agrees with the gauge's discharge flag, because the manual does not state the current's sign in words.
+- **Tested on an emulated BQ27426** (register map, incremental reads, NACK above 0x6B, wrong address) built on the same recorded cycles; its SoC is not Impedance Track.
+
+The live dashboard draws the gauge's SoC as an extra series when the source is a smart battery. On a real pack the gauge becomes the reference, and the EKF and the networks, which model an LG HG2 cell, only mean something if the pack is built from that cell; coulomb counting uses the pack's own full-charge capacity. Wiring and safety notes: [demo/README.md](demo/README.md#step-11-optional-read-a-real-smart-battery-over-smbus).
 
 ## Cell balancing (pack simulation)
 
@@ -224,7 +234,7 @@ data/           download.py, prepare.py, DATA_CARD.md (no raw data)
 src/socest/     ocv, ecm, params, identify, characterize, kalman, coulomb, thermal,
                 estimators, streaming, onnx_estimator, replay, metrics, resample,
                 split, cycles, cell, pack, sbs, smbus_link, smart_battery_emulator,
-                register_id
+                register_id, bq27426
 src/socest/ml/  data, models, train
 experiments/    m2_* cell model, m3_* EKF tuning and networks, m4_* evaluation,
                 m5_* ONNX and replay export, m6_balancing pack simulation,
@@ -234,7 +244,7 @@ demo/           edge node (edge.py), SMBus logger (smbus_log.py), setup guide,
 docs/           live dashboard (GitHub Pages)
 results/        figures, tables, characterization (identified model), models (weights, ONNX)
 tests/          unit tests: ECM, EKF, identification, loader, resampler, networks,
-                streaming, edge node, pack and balancing circuits, SMBus path
+                streaming, edge node, pack and balancing circuits, SMBus path, BQ27426
 run_all.py      one-command reproduction
 ```
 
@@ -252,7 +262,7 @@ run_all.py      one-command reproduction
 - **The 40 °C data is incomplete**: three training cycles and no validation cycles.
 - **Cost was measured on a cloud virtual machine only.** Raspberry Pi 5 numbers are not yet in the table; step 5 of [demo/README.md](demo/README.md) produces them.
 - **The edge demo replays recorded data.** There is no live cell or sensing hardware, and the reference SoC on the dashboard is the laboratory's.
-- **The SMBus path is tested on an emulated pack only.** The protocol handling follows the specification, but timing, clock stretching, sleep modes and vendor quirks of real gauges are untested, and the emulated gauge says nothing about how a commercial fuel gauge performs.
+- **The SMBus and BQ27426 paths are tested on emulated gauges only.** The protocol handling follows the specification, but timing, clock stretching, sleep modes and vendor quirks of real gauges are untested, and the emulated gauge says nothing about how a commercial fuel gauge performs.
 - **No UKF** and no adaptive filter were implemented.
 - **The balancing study is a simulation with assumed cell-to-cell variation**, at one temperature, with averaged converter models (constant efficiency, no switching ripple, no standby consumption) and no thermal model of the bleed resistors. It ranks the circuits and shows the mechanisms; it does not predict the numbers of a specific pack.
 
@@ -276,6 +286,7 @@ run_all.py      one-command reproduction
 - Y. Nie, N. H. Nguyen, P. Sinthong, J. Kalagnanam, "A time series is worth 64 words: long-term forecasting with Transformers," *ICLR*, 2023. (patch embedding)
 - Smart Battery System Implementers Forum, *Smart Battery Data Specification*, Revision 1.1, 1998.
 - Texas Instruments, *BQ4050 Technical Reference Manual*, SLUUAQ3A, 2022; *BQ40Z80 Technical Reference Manual*, SLUUBT5C, 2021. (vendor register layouts)
+- Texas Instruments, *bq27426 Technical Reference*, SLUUBB0, 2015.
 - E. Chemali, P. J. Kollmeyer, M. Preindl, R. Ahmed, A. Emadi, "Long short-term memory networks for accurate state-of-charge estimation of Li-ion batteries," *IEEE Transactions on Industrial Electronics*, vol. 65, no. 8, pp. 6730-6739, 2018.
 
 ## License

@@ -1,13 +1,17 @@
-"""Log a smart battery's SMBus registers to CSV, then identify unknown registers.
+"""Log a fuel gauge's registers to CSV: an SBS smart battery over SMBus, or a TI BQ27426.
 
-Read-only: only SMBus Read Word / Read Block transfers are issued (see
-socest/smbus_link.py), so the pack's settings cannot be changed.
+Read-only: only read transfers are issued (see socest/smbus_link.py and
+socest/bq27426.py), so the gauge's settings cannot be changed.
 
     # emulated pack (no hardware), whole 25 degC UDDS cycle as fast as possible
     python demo/smbus_log.py --emulate 25degC_UDDS --speed 0 --identify
 
     # real pack on the Raspberry Pi's I2C bus 1 (GPIO 2 = SDA, GPIO 3 = SCL), 1 Hz, 30 min
     python demo/smbus_log.py --bus 1 --duration 1800 --scan 0x24-0x3f --identify
+
+    # TI BQ27426 system-side gauge (one burst read per second, address 0x55)
+    python demo/smbus_log.py --gauge bq27426 --bus 1 --duration 1800
+    python demo/smbus_log.py --gauge bq27426 --emulate 25degC_UDDS
 
 Output in demo/runs/smbus-<time>/: log.csv (decoded registers and raw words),
 info.json (static registers, bus statistics) and, with --identify,
@@ -48,12 +52,21 @@ def flat(sample: dict) -> dict:
         if k == "BatteryStatus" and isinstance(v, dict):
             out["BatteryStatus_flags"] = "|".join(v["flags"])
             out["BatteryStatus_error"] = v["error"]
+        elif k == "Flags" and isinstance(v, list):
+            out["Flags"] = "|".join(v)
         else:
             out[k] = v
     return out
 
 
 def open_source(args):
+    if args.gauge == "bq27426":
+        from socest.bq27426 import EmulatedBq27426
+
+        if args.emulate:
+            em = EmulatedBq27426(args.emulate, error_rate=args.error_rate)
+            return em, em
+        return LinuxI2C(args.bus), None
     if args.emulate:
         from socest.smart_battery_emulator import EmulatedSmartBattery
 
@@ -67,7 +80,9 @@ def main():
     src = ap.add_mutually_exclusive_group(required=True)
     src.add_argument("--bus", type=int, help="Linux I2C bus number (/dev/i2c-N)")
     src.add_argument("--emulate", metavar="CYCLE", help="emulated pack replaying a cycle from demo/replay/")
-    ap.add_argument("--addr", type=lambda s: int(s, 0), default=sbs.SMART_BATTERY_ADDR, help="7-bit address (default 0x0b)")
+    ap.add_argument("--gauge", choices=["sbs", "bq27426"], default="sbs",
+                    help="sbs: smart battery (SBS 1.1, address 0x0b); bq27426: TI BQ27426 (address 0x55)")
+    ap.add_argument("--addr", type=lambda s: int(s, 0), default=None, help="7-bit address (default per gauge)")
     ap.add_argument("--pec", choices=["auto", "on", "off"], default="auto")
     ap.add_argument("--no-pec", action="store_true", help="emulated pack without PEC support")
     ap.add_argument("--period", type=float, default=1.0, help="seconds between samples (real pack)")
@@ -80,16 +95,28 @@ def main():
     args = ap.parse_args()
 
     transport, em = open_source(args)
-    pec = {"auto": None, "on": True, "off": False}[args.pec]
-    reader = SmartBatteryReader(transport, addr=args.addr, pec=pec, retry_delay_s=0.0 if em is not None else 0.02)
+    if args.gauge == "bq27426":
+        from socest.bq27426 import ADDR, Bq27426Reader
+
+        args.addr = args.addr or ADDR
+        args.period = max(args.period, 1.0)            # the gauge allows at most 2 commands per second
+        reader = Bq27426Reader(transport, addr=args.addr, min_interval_s=0.0 if em is not None else 0.5)
+        scan, args.identify = [], False
+    else:
+        args.addr = args.addr or sbs.SMART_BATTERY_ADDR
+        pec = {"auto": None, "on": True, "off": False}[args.pec]
+        reader = SmartBatteryReader(transport, addr=args.addr, pec=pec, retry_delay_s=0.0 if em is not None else 0.02)
+        scan = parse_codes(args.scan)
     info = reader.info()
-    scan = parse_codes(args.scan)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out = args.out or ROOT / "demo" / "runs" / f"smbus-{stamp}"
     out.mkdir(parents=True, exist_ok=True)
-    print(f"{info.get('ManufacturerName')} {info.get('DeviceName')} ({info.get('DeviceChemistry')}), "
-          f"design {info.get('DesignCapacity')} Ah / {info.get('DesignVoltage')} V, PEC {'on' if reader.pec else 'off'}; "
-          f"scanning {len(scan)} extra codes", flush=True)
+    if args.gauge == "bq27426":
+        print(f"{info['device']} at {info['addr']}", flush=True)
+    else:
+        print(f"{info.get('ManufacturerName')} {info.get('DeviceName')} ({info.get('DeviceChemistry')}), "
+              f"design {info.get('DesignCapacity')} Ah / {info.get('DesignVoltage')} V, "
+              f"PEC {'on' if reader.pec else 'off'}; scanning {len(scan)} extra codes", flush=True)
 
     stop = {"flag": False}
     signal.signal(signal.SIGINT, lambda *a: stop.update(flag=True))
@@ -122,6 +149,12 @@ def main():
             "info": info, "samples": len(log), "scan": [f"0x{c:02x}" for c in scan],
             "bus": {"ok": reader.stats.ok, "retried": reader.stats.retried, "failed": reader.stats.failed,
                     "pec_errors": reader.stats.pec_errors}}
+    if args.gauge == "bq27426" and len(log):
+        from socest.bq27426 import consistent
+
+        meta["checks"] = {**consistent(log.dropna(subset=["Current"])), "sign_mismatch": reader.sign_mismatch,
+                          "implausible": reader.implausible}
+        print(f"checks: {meta['checks']}")
     (out / "info.json").write_text(json.dumps(meta, indent=1, default=str))
     print(f"\n{len(log)} samples -> {out.relative_to(ROOT) if out.is_relative_to(ROOT) else out}/log.csv; "
           f"bus: {meta['bus']}")

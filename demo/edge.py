@@ -10,6 +10,10 @@ on every sample. Sources (--source):
     smbus           a real smart battery on the Pi's I2C bus (read-only); the pack's fuel
                     gauge is the reference. The EKF and the networks model an LG HG2 cell,
                     so their numbers mean something only for a pack built from that cell.
+    bq27426         a TI BQ27426 system-side Impedance Track gauge on the Pi's I2C bus
+                    (read-only, one burst read per second); its StateOfCharge() is the
+                    reference. Same caveat about the cell.
+    bq27426-emulated  the BQ27426 register interface served from the recorded cycle
 
 Estimators:
 
@@ -32,6 +36,7 @@ demo/runs/<run id>/ on the device.
     python demo/edge.py --cycle n20degC_UDDS --speed 1
     python demo/edge.py --source smbus-emulated --offline
     python demo/edge.py --source smbus --bus 1 --series 1 --parallel 1
+    python demo/edge.py --source bq27426 --bus 1
 
 Topics, under the prefix set in the config (default bms-soc-estimation/demo):
     online     retained, "1" while running, "0" otherwise (also the MQTT last will)
@@ -179,24 +184,34 @@ class ReplaySource:
 
 
 class SMBusSource:
-    """Samples from a smart battery: real (LinuxI2C) or emulated. Holds the last good value on a failed read."""
+    """Samples from a fuel gauge (SBS smart battery or BQ27426), real or emulated.
+
+    Holds the last good value on a failed read. With a real gauge (no emulator),
+    the gauge's own SoC is the reference.
+    """
 
     gauge = True
 
-    def __init__(self, reader: SmartBatteryReader, emulator=None, n_series=1, n_parallel=1, cell_voltage_cmd=None,
-                 n=86400, period=1.0):
+    def __init__(self, reader, emulator=None, n_series=1, n_parallel=1, cell_voltage_cmd=None,
+                 n=86400, period=1.0, family="smbus"):
         self.r, self.em, self.ns, self.np, self.cvc = reader, emulator, n_series, n_parallel, cell_voltage_cmd
-        self.kind = "smbus-emulated" if emulator is not None else "smbus"
+        self.live = emulator is None
+        self.kind = family + ("-emulated" if emulator is not None else "")
         self.name = emulator.cycle if emulator is not None else "live pack"
         self.n = emulator.n if emulator is not None else n
         self.period, self.t0 = period, None
         self.ref_label = ("laboratory coulomb counting (recorded cycle)" if emulator is not None
                           else "the pack's own fuel gauge")
-        self.last, self.stale = None, 0
+        self.last, self.stale, self.last_sample = None, 0, None
+        if family == "bq27426" and emulator is None:
+            self.ref_label = "the BQ27426's own StateOfCharge()"
+            self.name = "BQ27426 cell"
         self.read_ms = []
 
     def get(self, k):
         s = self.r.sample(names=SBS_READ)
+        if s.get("Voltage") is not None:
+            self.last_sample = s
         self.read_ms.append(s["t_read_ms"])
         cv = None
         if self.cvc is not None:
@@ -226,10 +241,12 @@ class Run:
     def __init__(self, source, soc_error_pts: float, threads: int, n: int | None = None, capacity_ah=None):
         self.src, self.cycle = source, source.name
         self.n = n or source.n
-        self.keys = KEYS + (["gauge"] if source.gauge and source.kind != "smbus" else [])
+        self.keys = KEYS + (["gauge"] if source.gauge and not getattr(source, "live", False) else [])
         self.labels = dict(LABELS)
         if source.kind == "smbus-emulated":
             self.labels["gauge"] = "Pack fuel gauge (emulated: OCV start, coulomb counting)"
+        elif source.kind == "bq27426-emulated":
+            self.labels["gauge"] = "BQ27426 interface (emulated gauge: OCV start, coulomb counting)"
         self.t, self.v, self.i, self.T, self.ref, self.gauge = (np.full(self.n, np.nan) for _ in range(6))
         self.k = 0
         self._take()                                      # first sample: initial SoC and temperature
@@ -309,7 +326,8 @@ def main():
     ap.add_argument("--threads", type=int, default=1, help="ONNX Runtime threads per network")
     ap.add_argument("--history-every", type=float, default=HISTORY_EVERY_S, help="seconds between history messages")
     g = ap.add_argument_group("SMBus sources")
-    g.add_argument("--source", choices=["replay", "smbus-emulated", "smbus"], default="replay")
+    g.add_argument("--source", choices=["replay", "smbus-emulated", "smbus", "bq27426-emulated", "bq27426"],
+                   default="replay")
     g.add_argument("--bus", type=int, default=1, help="I2C bus of the real pack (Raspberry Pi: 1)")
     g.add_argument("--addr", type=lambda x: int(x, 0), default=sbs.SMART_BATTERY_ADDR)
     g.add_argument("--series", type=int, default=1, help="cells in series in the pack")
@@ -325,6 +343,19 @@ def main():
     capacity, pack_info, reader = None, None, None
     if args.source == "replay":
         source = ReplaySource(args.cycle)
+    elif args.source.startswith("bq27426"):
+        from socest.bq27426 import Bq27426Reader, EmulatedBq27426
+
+        em = EmulatedBq27426(args.cycle, error_rate=args.bus_error_rate) if args.source.endswith("emulated") else None
+        if em is None:
+            args.period = max(args.period, 1.0)       # one burst read per sample, at most 2 per second allowed
+            args.speed = 1.0 / args.period
+        reader = Bq27426Reader(em if em is not None else LinuxI2C(args.bus), min_interval_s=0.0 if em else 0.5)
+        pack_info = reader.info()
+        source = SMBusSource(reader, em, n=args.limit or 86400, period=args.period, family="bq27426")
+        if em is None:
+            print("BQ27426: the EKF and networks model an LG HG2 cell; the gauge must be configured for the cell "
+                  "(design capacity, chemistry profile) with TI's tools", flush=True)
     else:
         em = None
         if args.source == "smbus-emulated":
@@ -346,6 +377,8 @@ def main():
             print(f"pack: {pack_info.get('ManufacturerName')} {pack_info.get('DeviceName')} "
                   f"({pack_info.get('DeviceChemistry')}); the EKF and networks model an LG HG2 cell", flush=True)
     run = Run(source, args.soc_error, args.threads, n=args.limit or None, capacity_ah=capacity)
+    if args.source == "bq27426" and source.last_sample and source.last_sample.get("FullChargeCapacity"):
+        run.est["cc"] = StreamingCoulomb(source.last_sample["FullChargeCapacity"], soc0=run.est["cc"].soc)
     n = min(run.n, args.limit) if args.limit else run.n
     run.n_target = n
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + (
@@ -357,7 +390,8 @@ def main():
 
     meta = {"run_id": run_id, "device": cfg.get("demo", {}).get("device") or device_name(), "host": socket.gethostname(),
             "cycle": source.name, "n_samples": n, "speed": args.speed, "soc_error_pts": args.soc_error,
-            "source": source.kind, "keys": run.keys, "ref_label": source.ref_label, "pack": pack_info,
+            "source": source.kind, "live": getattr(source, "live", False), "keys": run.keys,
+            "ref_label": source.ref_label, "pack": pack_info,
             "started_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "labels": run.labels, "models": run.models, "python": platform.python_version(),
             "onnxruntime": onnxruntime.__version__, "publish_every_s": PUBLISH_EVERY_S}
@@ -430,9 +464,11 @@ def main():
         ms = f"{m['median']:7.3f}  {m['p99']:7.3f}" if m else "      -        -"
         print(f"  {run.labels[key]:56s} {stats['rmse_pts'][key]:6.2f} {stats['max_pts'][key]:6.2f}        {ms}")
     if "smbus" in summary:
-        print(f"  SMBus: {summary['smbus']}")
-    if source.kind == "smbus":
-        print("  reference = the pack's fuel gauge; EKF and networks are LG HG2 models")
+        print(f"  Bus: {summary['smbus']}")
+    if getattr(source, "live", False):
+        print("  reference = the gauge's own SoC; EKF and networks are LG HG2 models")
+    if hasattr(reader, "sign_mismatch") and reader.sign_mismatch:
+        print(f"  WARNING: {reader.sign_mismatch} samples where the DSG flag contradicts the current sign")
     print(f"\nlog: {out_dir.relative_to(ROOT)}/")
 
 

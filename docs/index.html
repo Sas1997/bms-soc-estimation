@@ -344,7 +344,8 @@
     return m ? `${m[3]} at ${m[1] ? "-" : ""}${m[2]} °C` : c || "-";
   }
 
-  const SOURCE = { replay: "replayed cycle", "smbus-emulated": "SMBus, emulated smart battery", smbus: "SMBus, live pack" };
+  const SOURCE = { replay: "replayed cycle", "smbus-emulated": "SMBus, emulated smart battery", smbus: "SMBus, live pack",
+                   "bq27426-emulated": "I2C, emulated BQ27426 gauge", bq27426: "I2C, live BQ27426 gauge" };
 
   function renderMeta() {
     const m = st.meta;
@@ -354,13 +355,14 @@
     $("tile-gauge").classList.toggle("hidden", !hasGauge());
     document.querySelector(".tiles").style.setProperty("--ntiles", hasGauge() ? 6 : 5);
     $("st-source").textContent = SOURCE[m.source || "replay"] || m.source;
-    $("n-gauge").textContent = m.source === "smbus-emulated" ? "Pack fuel gauge (emulated)" : "Pack fuel gauge";
+    $("n-gauge").textContent = { "smbus-emulated": "Pack fuel gauge (emulated)", "bq27426-emulated": "BQ27426 (emulated)" }[m.source]
+      || "Pack fuel gauge";
     $("sub-ref").textContent = m.ref_label || "laboratory coulomb counting";
     $("st-cycle").textContent = cycleName(m.cycle) + (m.cycle && m.cycle.startsWith("10degC") ? " (held-out temperature)" : "");
     $("st-speed").textContent = m.speed === 1 ? "real time (1 Hz)" : `${m.speed}x real time`;
     $("note-soc").textContent = `The EKF and coulomb counting start ${m.soc_error_pts} points below the ` +
-      (m.source === "smbus" ? "pack gauge's SoC" : "true SoC") + "; the networks need no initial state." +
-      (hasGauge() ? " The pack fuel gauge reports whole percent." : "");
+      (m.live ? "gauge's own SoC" : "true SoC") + "; the networks need no initial state." +
+      (hasGauge() ? " The fuel gauge reports whole percent." : "");
     $("ft-meta").textContent = `Run ${m.run_id} on ${m.device} (host ${m.host}), started ${m.started_utc}. ` +
       `EKF model ${m.models.ekf}; networks ${m.models.lstm} and ${m.models.transformer} run with ONNX Runtime ${m.onnxruntime}; Python ${m.python}.`;
   }

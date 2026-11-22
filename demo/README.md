@@ -76,7 +76,7 @@ pip install -r demo/requirements-pi.txt
 python -m pytest -q
 ```
 
-The last line should end with `59 passed, 3 skipped` (the three skipped tests need PyTorch or h5py, which the
+The last line should end with `66 passed, 3 skipped` (the three skipped tests need PyTorch or h5py, which the
 Pi does not need). After you log in again later, run `cd bms-soc-estimation` and
 `source ~/bms-venv/bin/activate` before any `python` command.
 
@@ -216,6 +216,33 @@ cell. If the logger found a cell-voltage register, pass it with `--cell-voltage-
 
 If reads fail intermittently, slow the bus: add `dtparam=i2c_arm_baudrate=50000` to `/boot/firmware/config.txt`
 and reboot.
+
+## Step 12 (optional). Read a TI BQ27426 fuel gauge
+
+The BQ27426 is a single-cell system-side Impedance Track gauge (TI's evaluation board: BQ27426EVM-738). The cell
+and the load connect to the board, so the gauge measures the cell's current through its sense resistor; the Pi
+only reads the gauge over I2C. No board yet? `python demo/edge.py --source bq27426-emulated` runs the same code on
+an emulated gauge.
+
+1. **Configure the gauge for the cell first**, with TI's Battery Management Studio and an EV2400 adapter as in
+   the EVM user's guide: design capacity, terminate voltage, and the chemistry profile (for a 4.2 V cell such as
+   the LG HG2: CHEM_B, Chem ID 1202). This repository only reads the gauge and never changes its settings.
+2. **Wire the board's I2C header to the Pi**: SDA to pin 3, SCL to pin 5, ground to pin 6, ground first. As in
+   step 11, if the board pulls SDA and SCL above 3.3 V, use a level shifter.
+3. **Check that it answers** at address 0x55: `i2cdetect -y -r 1 0x55 0x55`.
+4. **Log it** (one burst read per second; the gauge allows at most two commands per second):
+
+   ```
+   python demo/smbus_log.py --gauge bq27426 --bus 1 --duration 3600
+   ```
+
+   The log has the gauge's StateOfCharge (filtered and unfiltered), capacities, StateOfHealth with its Qmax
+   learning status, and flags. At the end it prints a sign check; `current_sign_agrees_with_DSG` should be 1.0.
+
+5. **Stream it**, with the gauge's SoC as the reference: `python demo/edge.py --source bq27426`.
+
+The temperature the gauge reports may be its internal sensor rather than the cell's (OpConfig [TEMPS] in the
+manual), which matters for the EKF and the networks at low temperature.
 
 ## Troubleshooting
 
