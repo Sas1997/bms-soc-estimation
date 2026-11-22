@@ -22,6 +22,7 @@
     --series-lstm: #1baf7a;
     --series-transformer: #eda100;
     --series-cc: #898781;
+    --series-gauge: #eb6834;
     --good: #0ca30c;
     --critical: #d03b3b;
     --warning: #fab219;
@@ -40,6 +41,7 @@
       --series-ekf: #3987e5;
       --series-lstm: #199e70;
       --series-transformer: #c98500;
+      --series-gauge: #d95926;
     }
   }
   :root[data-theme="dark"] {
@@ -55,6 +57,7 @@
     --series-ekf: #3987e5;
     --series-lstm: #199e70;
     --series-transformer: #c98500;
+    --series-gauge: #d95926;
   }
   * { box-sizing: border-box; }
   body {
@@ -77,7 +80,8 @@
   .dot.critical { background: var(--critical); }
   .dot.warning { background: var(--warning); }
   .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
-  .tiles { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin-bottom: 12px; }
+  .tiles { display: grid; grid-template-columns: repeat(var(--ntiles, 5), minmax(0, 1fr)); gap: 10px; margin-bottom: 12px; }
+  .tile.hidden { display: none; }
   .tile .name { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--text-secondary); }
   .swatch { width: 14px; height: 3px; border-radius: 2px; flex: none; }
   .swatch.dashed { background: repeating-linear-gradient(90deg, var(--series-cc) 0 5px, transparent 5px 8px) !important; }
@@ -116,14 +120,16 @@
 <main>
   <header>
     <h1>Live state-of-charge estimation at the edge</h1>
-    <p>A single-board computer replays a laboratory drive cycle as if it came from a live Li-ion cell, estimates
-      state of charge on the device, and streams measurements and estimates here over MQTT.
+    <p>A single-board computer takes Li-ion cell measurements (a replayed laboratory drive cycle, or a smart
+      battery read over SMBus), estimates state of charge on the device, and streams measurements and estimates
+      here over MQTT.
       Code and method: <a href="https://github.com/SAS1997/bms-soc-estimation">bms-soc-estimation</a>.</p>
   </header>
 
   <div class="status" aria-live="polite">
     <span class="chip"><span class="dot" id="dot-broker"></span>Cloud broker: <b id="st-broker">connecting</b></span>
     <span class="chip"><span class="dot" id="dot-edge"></span>Edge device: <b id="st-edge">unknown</b></span>
+    <span class="chip">Source: <b id="st-source">-</b></span>
     <span class="chip">Cycle: <b id="st-cycle">-</b></span>
     <span class="chip">Replay speed: <b id="st-speed">-</b></span>
     <span class="chip">Progress: <b id="st-progress">-</b></span>
@@ -138,7 +144,7 @@
 
   <section class="tiles" aria-label="Current state of charge">
     <div class="card tile"><div class="name"><span class="swatch" style="background:var(--series-ref)"></span>Reference SoC</div>
-      <div class="value" id="v-ref">-</div><div class="sub">laboratory coulomb counting</div></div>
+      <div class="value" id="v-ref">-</div><div class="sub" id="sub-ref">laboratory coulomb counting</div></div>
     <div class="card tile"><div class="name"><span class="swatch" style="background:var(--series-ekf)"></span>EKF, 3RC (calibrated)</div>
       <div class="value" id="v-ekf">-</div><div class="sub" id="e-ekf">-</div></div>
     <div class="card tile"><div class="name"><span class="swatch" style="background:var(--series-lstm)"></span>LSTM</div>
@@ -147,6 +153,8 @@
       <div class="value" id="v-transformer">-</div><div class="sub" id="e-transformer">-</div></div>
     <div class="card tile"><div class="name"><span class="swatch dashed"></span>Coulomb counting</div>
       <div class="value" id="v-cc">-</div><div class="sub" id="e-cc">-</div></div>
+    <div class="card tile hidden" id="tile-gauge"><div class="name"><span class="swatch" style="background:var(--series-gauge)"></span><span id="n-gauge">Pack fuel gauge</span></div>
+      <div class="value" id="v-gauge">-</div><div class="sub" id="e-gauge">-</div></div>
   </section>
 
   <section class="card chart-card">
@@ -188,9 +196,12 @@
 <script>
 (() => {
   "use strict";
-  const KEYS = ["ekf", "lstm", "transformer", "cc"];
-  const LABEL = { ref: "Reference", ekf: "EKF", lstm: "LSTM", transformer: "Transformer", cc: "Coulomb counting" };
-  const FIELDS = ["k", "t", "v", "i", "T", "ref", "ekf_sd", ...KEYS];
+  const BASE_KEYS = ["ekf", "lstm", "transformer", "cc"];
+  let KEYS = BASE_KEYS;            // the run's meta.keys; "gauge" is added when the source is a smart battery
+  const LABEL = { ref: "Reference", ekf: "EKF", lstm: "LSTM", transformer: "Transformer", cc: "Coulomb counting",
+                  gauge: "Pack fuel gauge" };
+  const FIELDS = ["k", "t", "v", "i", "T", "ref", "ekf_sd", ...BASE_KEYS, "gauge"];
+  const hasGauge = () => KEYS.includes("gauge");
 
   // ---------------------------------------------------------------- config
   const cfg = Object.assign({ port: 8884, path: "/mqtt", topic: "bms-soc-estimation/demo", tls: true }, window.BMS_CONFIG || {});
@@ -261,12 +272,14 @@
     for (const c of Object.values(charts)) c.destroy();
     for (const id of ["p-soc", "p-err", "p-v", "p-i", "p-t"]) $(id).innerHTML = "";
     const errRange = (u, min, max) => { const m = Math.max(5, Math.ceil(Math.max(Math.abs(min), Math.abs(max)))); return [-m, m]; };
+    // The gauge reports whole percent: drawn as steps, and only when the run has a gauge.
+    const gauge = (d) => (hasGauge() ? [line("gauge", "Pack gauge", d, { paths: uPlot.paths.stepped({ align: 1 }) })] : []);
     charts = {
       soc: makeChart($("p-soc"), 300, "SoC (%)", [
         line("ref", "Reference", 1, { width: 2.5 }), line("ekf", "EKF", 1), line("lstm", "LSTM", 1),
-        line("transformer", "Transformer", 1), line("cc", "Coulomb counting", 1, { dash: [7, 5] })]),
+        line("transformer", "Transformer", 1), line("cc", "Coulomb counting", 1, { dash: [7, 5] }), ...gauge(1)]),
       err: makeChart($("p-err"), 230, "Error (points)", [line("ekf", "EKF", 2), line("lstm", "LSTM", 2),
-        line("transformer", "Transformer", 2)], errRange),
+        line("transformer", "Transformer", 2), ...gauge(2)], errRange),
       v: makeChart($("p-v"), 200, "V", [line("ref", "Voltage", 3, { width: 1.25 })]),
       i: makeChart($("p-i"), 200, "A", [line("ref", "Current", 2, { width: 1 })]),
       t: makeChart($("p-t"), 200, "°C", [line("ref", "Temperature", 1, { width: 1.5 })]),
@@ -280,8 +293,9 @@
     const x = D.t.map((t) => t / 60);
     const pct = (a) => a.map((v) => (v == null ? null : 100 * v));
     const err = (key) => D[key].map((v, j) => (v == null || D.ref[j] == null ? null : 100 * (v - D.ref[j])));
-    charts.soc.setData([x, pct(D.ref), pct(D.ekf), pct(D.lstm), pct(D.transformer), pct(D.cc)]);
-    charts.err.setData([x, err("ekf"), err("lstm"), err("transformer")]);
+    const g = hasGauge();
+    charts.soc.setData([x, pct(D.ref), pct(D.ekf), pct(D.lstm), pct(D.transformer), pct(D.cc), ...(g ? [pct(D.gauge)] : [])]);
+    charts.err.setData([x, err("ekf"), err("lstm"), err("transformer"), ...(g ? [err("gauge")] : [])]);
     charts.v.setData([x, D.v]);
     charts.i.setData([x, D.i]);
     charts.t.setData([x, D.T]);
@@ -330,13 +344,23 @@
     return m ? `${m[3]} at ${m[1] ? "-" : ""}${m[2]} °C` : c || "-";
   }
 
+  const SOURCE = { replay: "replayed cycle", "smbus-emulated": "SMBus, emulated smart battery", smbus: "SMBus, live pack" };
+
   function renderMeta() {
     const m = st.meta;
     if (!m) return;
+    const keys = m.keys || BASE_KEYS;
+    if (keys.join() !== KEYS.join()) { KEYS = keys; buildCharts(); }
+    $("tile-gauge").classList.toggle("hidden", !hasGauge());
+    document.querySelector(".tiles").style.setProperty("--ntiles", hasGauge() ? 6 : 5);
+    $("st-source").textContent = SOURCE[m.source || "replay"] || m.source;
+    $("n-gauge").textContent = m.source === "smbus-emulated" ? "Pack fuel gauge (emulated)" : "Pack fuel gauge";
+    $("sub-ref").textContent = m.ref_label || "laboratory coulomb counting";
     $("st-cycle").textContent = cycleName(m.cycle) + (m.cycle && m.cycle.startsWith("10degC") ? " (held-out temperature)" : "");
     $("st-speed").textContent = m.speed === 1 ? "real time (1 Hz)" : `${m.speed}x real time`;
-    $("note-soc").textContent = `The EKF and coulomb counting start ${m.soc_error_pts} points below the true SoC; ` +
-      "the networks need no initial state.";
+    $("note-soc").textContent = `The EKF and coulomb counting start ${m.soc_error_pts} points below the ` +
+      (m.source === "smbus" ? "pack gauge's SoC" : "true SoC") + "; the networks need no initial state." +
+      (hasGauge() ? " The pack fuel gauge reports whole percent." : "");
     $("ft-meta").textContent = `Run ${m.run_id} on ${m.device} (host ${m.host}), started ${m.started_utc}. ` +
       `EKF model ${m.models.ekf}; networks ${m.models.lstm} and ${m.models.transformer} run with ONNX Runtime ${m.onnxruntime}; Python ${m.python}.`;
   }

@@ -41,7 +41,7 @@ def test_onnx_step_by_step_matches_batch(kind):
 def test_edge_run_and_messages():
     import edge
 
-    run = edge.Run("10degC_US06", soc_error_pts=20.0, threads=1)
+    run = edge.Run(edge.ReplaySource("10degC_US06"), soc_error_pts=20.0, threads=1)
     run.n_target = 300
     for _ in range(300):
         run.step()

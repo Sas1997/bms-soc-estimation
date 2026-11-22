@@ -18,6 +18,7 @@ Steps (each is a standalone script and can be run on its own):
  11. experiments/m4_cost.py            time per step and memory on this machine
  12. experiments/m4_figures.py         headline figure
  13. experiments/m6_balancing.py       passive vs active cell balancing (pack simulation)
+ 14. experiments/m7_smbus.py           smart-battery (SMBus) input path on an emulated pack
 
 Edge demo files (run before step 8 and step 11, which use them):
   experiments/m5_export_replay.py      demo replay excerpt and capacity table
@@ -73,6 +74,7 @@ def main():
     run("experiments/m4_cost.py", "--label", args.cost_label)
     run("experiments/m4_figures.py")
     run("experiments/m6_balancing.py")
+    run("experiments/m7_smbus.py")
     print("\nAll results are in results/. Summary: results/tables/m4_summary.md, figure: results/figures/headline.png")
 
 

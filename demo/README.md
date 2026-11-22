@@ -5,7 +5,8 @@ Li-ion cell, and runs four SoC estimators on the device: the calibrated EKF, the
 (as ONNX models in ONNX Runtime, no PyTorch needed), and coulomb counting. It streams measurements and
 estimates over MQTT with TLS to a free HiveMQ Cloud broker. A web page (`docs/index.html`) subscribes over a
 secure WebSocket and plots everything live. This mirrors a cloud-connected BMS: estimation at the edge,
-logging and monitoring in the cloud.
+logging and monitoring in the cloud. Instead of a replay, the Pi can also read a real smart battery pack over
+its SMBus data port (step 11).
 
 ```
  Raspberry Pi 5                         HiveMQ Cloud (free)              Browser
@@ -75,7 +76,7 @@ pip install -r demo/requirements-pi.txt
 python -m pytest -q
 ```
 
-The last line should end with `47 passed, 3 skipped` (the three skipped tests need PyTorch or h5py, which the
+The last line should end with `59 passed, 3 skipped` (the three skipped tests need PyTorch or h5py, which the
 Pi does not need). After you log in again later, run `cd bms-soc-estimation` and
 `source ~/bms-venv/bin/activate` before any `python` command.
 
@@ -163,6 +164,59 @@ GitHub Pages serves `docs/` as a public web page for free when the repository is
 The broker keeps the last run (retained messages), so the page shows the most recent run with its metrics even
 when the Pi is off.
 
+## Step 11 (optional). Read a real smart battery over SMBus
+
+No pack yet? Everything below also runs on an emulated pack:
+`python demo/smbus_log.py --emulate 25degC_UDDS --identify` and
+`python demo/edge.py --source smbus-emulated` (the dashboard then shows the gauge as a sixth tile and line).
+
+**Safety first.** The software only reads (no write commands exist in it), but the wiring is yours:
+
+- Connect only three wires: the pack's SMBus data (SDA, sometimes labelled SMD), clock (SCL, SMC) and ground.
+  Never connect the pack's power terminals to the Pi. Find the pins in the pack's or the device's documentation,
+  not by probing.
+- Connect ground first.
+- The Pi's I2C pins are 3.3 V only and already have 1.8 kΩ pull-ups to 3.3 V. If the pack pulls its SMBus lines
+  up to a higher voltage (measure SDA and SCL to ground with the Pi disconnected), put a bidirectional I2C level
+  shifter in between.
+- Some packs keep their gauge asleep or their output off until they see a charger or a host; that is normal.
+
+**Wiring** (Raspberry Pi 5 header): pin 3 = GPIO 2 = SDA, pin 5 = GPIO 3 = SCL, pin 6 = ground.
+
+**Enable I2C and look for the battery** (smart batteries answer at address 0x0b):
+
+```
+sudo raspi-config nonint do_i2c 0
+sudo apt install -y i2c-tools
+i2cdetect -y -r 1 0x0b 0x0b
+```
+
+`-r` makes `i2cdetect` probe with a read, and the address range limits it to the battery, so nothing else on the
+bus is touched. `0b` in the grid means the battery answered.
+
+**Log the pack and identify its vendor registers** (1 Hz for 30 minutes; run the pack through charge and
+discharge if you can, which separates quantities that otherwise move together):
+
+```
+python demo/smbus_log.py --bus 1 --duration 1800 --scan 0x24-0x3f --identify
+```
+
+It prints the pack's name, chemistry and design capacity, then every 10 samples voltage, current, temperature and
+the gauge's SoC. At the end, `demo/runs/smbus-<time>/registers.md` lists what each scanned code tracks.
+
+**Stream it to the dashboard**, for a pack with, for example, 3 cells in series and 2 in parallel:
+
+```
+python demo/edge.py --source smbus --series 3 --parallel 2
+```
+
+The pack's own fuel gauge is then the reference. Coulomb counting uses the pack's full-charge capacity; the EKF
+and the networks are models of an LG HG2 cell, so their numbers are meaningful only for a pack built from that
+cell. If the logger found a cell-voltage register, pass it with `--cell-voltage-cmd 0x3f` (for example).
+
+If reads fail intermittently, slow the bus: add `dtparam=i2c_arm_baudrate=50000` to `/boot/firmware/config.txt`
+and reboot.
+
 ## Troubleshooting
 
 | Problem | Fix |
@@ -174,3 +228,5 @@ when the Pi is off.
 | Dashboard says `not configured` | `docs/config.js` still has an empty `host` or `username`. |
 | Dashboard stays on `reconnecting` | Wrong Cluster URL or password in `docs/config.js`, or a network that blocks port 8884. |
 | `pip install` is slow | Normal on the first install. |
+| `smbus_log.py`: `Remote I/O error` | No answer at 0x0b: check SDA/SCL are not swapped, ground is connected, and the pack is awake (step 11). |
+| `smbus_log.py`: `PEC mismatch` keeps repeating | Noise on the bus: shorter wires, slower bus (step 11), or `--pec off` to see whether the gauge sends PEC at all. |

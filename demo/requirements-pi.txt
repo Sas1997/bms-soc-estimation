@@ -1,11 +1,12 @@
 # Edge device (Raspberry Pi 5, Raspberry Pi OS 64-bit, Python 3.13): everything
 # demo/edge.py, experiments/m4_cost.py and the unit tests need. No PyTorch: the
 # networks run as ONNX models in ONNX Runtime (see experiments/m5_export_onnx.py).
-# All of these have Linux ARM64 wheels for Python 3.13 on PyPI.
+# All of these have Linux ARM64 wheels for Python 3.13 on PyPI (smbus2 is pure Python).
 numpy==2.5.3
 scipy==1.18.1
 pandas==3.0.5
 onnxruntime==1.31.0
 paho-mqtt==2.1.0
+smbus2==0.6.1
 tabulate==0.10.0
 pytest==9.1.1

@@ -144,7 +144,29 @@ A small version of a cloud-connected BMS: estimation on an edge device, monitori
 - **Networks without PyTorch.** The PyPI build of PyTorch for Linux ARM64 is 484 MB and depends on CUDA libraries a Pi cannot use. The selected networks are exported to ONNX (23 kB and 99 kB) and run in ONNX Runtime (a 23 MB package); the exported models reproduce PyTorch to within 5 × 10⁻⁷ SoC on every sample of a test cycle ([results/tables/m5_onnx_export.md](results/tables/m5_onnx_export.md)).
 - **Data on the device.** Three test cycles at 1 Hz ship in `demo/replay/` (25 °C UDDS, -20 °C UDDS, 10 °C US06), a small attributed excerpt of the dataset under its CC BY 4.0 licence, so the Pi needs neither the raw data nor the processing pipeline.
 - **Cloud** (`docs/index.html`): a static page served by GitHub Pages that subscribes with a read-only credential and plots SoC, SoC error, voltage, current and temperature, with a metrics table (RMSE, maximum error, compute time per step on the device).
-- **Tested** end to end in this repository against a local MQTT broker (TCP and WebSocket listeners), with the dashboard in headless Chrome: live updates, joining mid-run, and opening after the run from retained messages. The install was rehearsed in a clean environment with only `demo/requirements-pi.txt` (no PyTorch, no dataset): 47 tests pass.
+- **Tested** end to end in this repository against a local MQTT broker (TCP and WebSocket listeners), with the dashboard in headless Chrome: live updates, joining mid-run, and opening after the run from retained messages. The install was rehearsed in a clean environment with only `demo/requirements-pi.txt` (no PyTorch, no dataset): 59 tests pass.
+
+## Smart battery over SMBus
+
+Most commercial packs (laptops, power tools, e-bikes, medical and industrial devices) carry a fuel-gauge chip that reports its measurements and its own SoC on the SMBus, a two-wire bus based on I2C, in the format of the Smart Battery Data Specification (SBS 1.1). This adds that input path, so the estimators can run on what a real pack reports and be compared against the pack's own gauge. Code: `src/socest/sbs.py`, `smbus_link.py`, `smart_battery_emulator.py`, `register_id.py`; tools: `demo/smbus_log.py` and `demo/edge.py --source smbus`. Full tables: [results/tables/m7_smbus.md](results/tables/m7_smbus.md).
+
+- **Read-only by construction.** The reader implements only the SBS read protocols (Read Word, Read Block): it sends the address and a command byte, then reads. There is no write function, so it cannot change gauge settings, seal or unseal a pack, or switch its protection FETs. Replies are checked with the SMBus packet error code (PEC, CRC-8) when the gauge supports it, and failed transfers are retried.
+- **Standard registers decoded** with the specification's units and scale factors (VScale, IPScale, mAh or 10 mWh capacity mode), status flags and error codes. Current is converted to this package's sign convention (positive = discharge).
+- **Undocumented registers identified from data.** Gauges also put useful data (cell voltages, temperatures, counters) at manufacturer-specific codes, and the layout differs even within one vendor: code 0x3F is CellVoltage1() on the TI BQ4050 but CellVoltage4() on the BQ40Z80. `register_id.py` logs the raw words of unknown codes and fits each against the decoded standard registers and the integrals of current, reading the word as unsigned and as signed. For each code it reports which quantity it tracks, with scale, sign and offset, or that it is constant, unexplained or unanswered. This is a transparent statistical decoder, not a black box: every verdict comes with its fit.
+- **Emulated pack for testing.** With no pack on the bench, an emulated SBS gauge serves the recorded test cycles byte for byte, with PEC, injected bus errors and corrupted replies, and a few vendor registers whose meaning is hidden from the decoder. Its own SoC is a simple OCV start plus coulomb counting, so it exercises the pipeline; it is not a model of a commercial gauge.
+
+**Results on the emulated pack** (three test cycles, 1 % of transfers failing and 0.5 % of replies corrupted):
+
+| | |
+|:--|:--|
+| Corrupted replies caught by PEC and re-read | 1,616 |
+| Decoded values vs the recording | within SBS resolution on every sample (at most 0.5 mV, 0.5 mA, 0.05 K) |
+| Reads lost after retries | 0 (308,292 successful reads) |
+| Effect of SBS resolution (1 mV, 1 mA, 0.1 K) on SoC RMSE | at most 0.012 points, for any estimator and cycle |
+| Vendor registers identified (quantity, scale and sign) | 48 of 48 code-cycle pairs, including a signed temperature below 0 °C |
+| Bus time per 1 Hz sample on the cloud VM (emulated) | 0.3 ms median for 5 registers |
+
+The live dashboard draws the pack gauge's SoC as an extra series when the source is a smart battery. On a real pack the gauge becomes the reference, and the EKF and the networks, which model an LG HG2 cell, only mean something if the pack is built from that cell; coulomb counting uses the pack's own full-charge capacity. Wiring and safety notes: [demo/README.md](demo/README.md#step-11-optional-read-a-real-smart-battery-over-smbus).
 
 ## Cell balancing (pack simulation)
 
@@ -201,15 +223,18 @@ Random seeds are fixed. The model identification, EKF and evaluation are determi
 data/           download.py, prepare.py, DATA_CARD.md (no raw data)
 src/socest/     ocv, ecm, params, identify, characterize, kalman, coulomb, thermal,
                 estimators, streaming, onnx_estimator, replay, metrics, resample,
-                split, cycles, cell, pack
+                split, cycles, cell, pack, sbs, smbus_link, smart_battery_emulator,
+                register_id
 src/socest/ml/  data, models, train
 experiments/    m2_* cell model, m3_* EKF tuning and networks, m4_* evaluation,
-                m5_* ONNX and replay export, m6_balancing pack simulation
-demo/           edge node (edge.py), setup guide, Pi requirements, replay excerpt
+                m5_* ONNX and replay export, m6_balancing pack simulation,
+                m7_smbus smart-battery input path
+demo/           edge node (edge.py), SMBus logger (smbus_log.py), setup guide,
+                Pi requirements, replay excerpt
 docs/           live dashboard (GitHub Pages)
 results/        figures, tables, characterization (identified model), models (weights, ONNX)
 tests/          unit tests: ECM, EKF, identification, loader, resampler, networks,
-                streaming, edge node, pack and balancing circuits
+                streaming, edge node, pack and balancing circuits, SMBus path
 run_all.py      one-command reproduction
 ```
 
@@ -227,13 +252,14 @@ run_all.py      one-command reproduction
 - **The 40 °C data is incomplete**: three training cycles and no validation cycles.
 - **Cost was measured on a cloud virtual machine only.** Raspberry Pi 5 numbers are not yet in the table; step 5 of [demo/README.md](demo/README.md) produces them.
 - **The edge demo replays recorded data.** There is no live cell or sensing hardware, and the reference SoC on the dashboard is the laboratory's.
+- **The SMBus path is tested on an emulated pack only.** The protocol handling follows the specification, but timing, clock stretching, sleep modes and vendor quirks of real gauges are untested, and the emulated gauge says nothing about how a commercial fuel gauge performs.
 - **No UKF** and no adaptive filter were implemented.
 - **The balancing study is a simulation with assumed cell-to-cell variation**, at one temperature, with averaged converter models (constant efficiency, no switching ripple, no standby consumption) and no thermal model of the bleed resistors. It ranks the circuits and shows the mechanisms; it does not predict the numbers of a specific pack.
 
 ## Next steps
 
 - **Thermal sensing.** The largest remaining model error is in the cold, where the cell self-heats and one external temperature is a poor proxy for the temperature the electrochemistry sees. An internal temperature measurement, for example from fiber Bragg grating sensors embedded in a pack, would replace the fitted thermal gain with a measured input and allow a proper electro-thermal model.
-- **A live cell at the edge.** Replace the replay in `demo/edge.py` with a cell and voltage, current and temperature sensing connected to the Pi, so the same estimators and dashboard run on live measurements.
+- **A live cell at the edge.** Run `demo/edge.py --source smbus` on a real smart battery (for example a pack built from LG HG2 cells), or connect a cell with voltage, current and temperature sensing to the Pi, so the same estimators and dashboard run on live measurements and can be compared with a commercial fuel gauge.
 - **Active cell balancing on hardware.** The simulation above ranks the circuits; the next step is a prototype adjacent or cell-to-pack balancer on a small pack, driven by per-cell SoC estimates, to measure real converter efficiency and to test balancing on estimated rather than true SoC, where only cell-to-cell estimation differences matter.
 - **A second cell.** Repeat on the Samsung INR21700 30T dataset from the same laboratory (same protocol) to test how each method transfers to a new cell.
 - **State of health**, and a hybrid estimator that uses a network to correct the EKF's model error.
@@ -248,6 +274,8 @@ run_all.py      one-command reproduction
 - J. Gallardo-Lozano, E. Romero-Cadaval, M. I. Milanes-Montero, M. A. Guerrero-Martinez, "Battery equalization active methods," *Journal of Power Sources*, vol. 246, pp. 934-949, 2014. doi:10.1016/j.jpowsour.2013.08.026
 - A. Vaswani et al., "Attention is all you need," *Advances in Neural Information Processing Systems*, 2017.
 - Y. Nie, N. H. Nguyen, P. Sinthong, J. Kalagnanam, "A time series is worth 64 words: long-term forecasting with Transformers," *ICLR*, 2023. (patch embedding)
+- Smart Battery System Implementers Forum, *Smart Battery Data Specification*, Revision 1.1, 1998.
+- Texas Instruments, *BQ4050 Technical Reference Manual*, SLUUAQ3A, 2022; *BQ40Z80 Technical Reference Manual*, SLUUBT5C, 2021. (vendor register layouts)
 - E. Chemali, P. J. Kollmeyer, M. Preindl, R. Ahmed, A. Emadi, "Long short-term memory networks for accurate state-of-charge estimation of Li-ion batteries," *IEEE Transactions on Industrial Electronics*, vol. 65, no. 8, pp. 6730-6739, 2018.
 
 ## License
