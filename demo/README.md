@@ -20,13 +20,15 @@ Total time: about 1 hour, most of it waiting for the SD card and the installs.
 ## What you need
 
 - The Raspberry Pi 5.
-- A microSD card of 32 GB (16 GB is the minimum), and a card reader for your laptop.
+- A microSD card of 32 GB (16 GB is the minimum).
 - A USB-C power supply. The official Raspberry Pi 27 W supply is the safe choice for a Pi 5.
 - A Wi-Fi network with a plain password (home Wi-Fi or a phone hotspot), or an Ethernet cable to your router.
   The campus eduroam network needs an enterprise login that the setup below does not configure.
 - Your Windows laptop on the same network.
+- To write the card: a card reader for the laptop (step 1A), or, without one, a USB keyboard and mouse, a
+  monitor with a micro-HDMI-to-HDMI cable, and an Ethernet cable to a router or to the laptop (step 1B).
 
-## Step 1. Prepare the SD card (10 min)
+## Step 1A. Prepare the SD card on the laptop (10 min)
 
 1. Install Raspberry Pi Imager from <https://www.raspberrypi.com/software/> and open it.
 2. Device: **Raspberry Pi 5**. Operating system: **Raspberry Pi OS (64-bit)**. Storage: your microSD card.
@@ -39,9 +41,33 @@ Total time: about 1 hour, most of it waiting for the SD card and the installs.
    - Raspberry Pi Connect: skip
 4. Write the card and wait until Imager says it is done.
 
+## Step 1B. No card reader: install over the network from the Pi itself (30 min)
+
+The Pi 5 can download Raspberry Pi Imager into its memory and write the card in its own slot. This needs a
+wired internet connection, a keyboard and a monitor on the Pi.
+
+1. **Give the Pi a wired connection.** Plug an Ethernet cable from the Pi into your router. Or, if the laptop
+   has an Ethernet port (or a USB Ethernet adapter), share the laptop's Wi-Fi over the cable: press
+   `Win + R`, type `ncpa.cpl`, Enter; right-click **Wi-Fi**, **Properties**, **Sharing** tab; tick **Allow other
+   network users to connect through this computer's Internet connection**; under **Home networking connection**
+   choose **Ethernet**; OK. Then plug the cable from the laptop into the Pi.
+2. Put the blank microSD card in the Pi. Remove any USB drives. Connect the keyboard, mouse and monitor (use the
+   micro-HDMI port next to the USB-C power port).
+3. **Hold Shift** on the Pi's keyboard while you connect the power, and keep holding until the screen says it is
+   downloading the installer. If the Pi is already showing its bootloader screen, holding Shift there also
+   works. If it asks you to confirm, press Space.
+4. After a few minutes Raspberry Pi Imager opens on the Pi's screen. Choose and customise exactly as in step 1A
+   (device, OS, storage = the SD card in the Pi, hostname `bms-pi`, user `ali`, Wi-Fi, SSH on). If the Pi will
+   stay on the laptop's cable, you can skip Wi-Fi.
+5. Write, confirm, and wait (about 10 to 20 minutes; the OS is downloaded first). When Imager says it is done,
+   let the Pi restart. It boots from the new card; the first start takes 2 to 3 minutes.
+
+If the installer waits for the network: check the cable, and on the laptop untick and re-tick the sharing box.
+
 ## Step 2. Start the Pi and log in (5 min)
 
-1. Put the card in the Pi and connect power. The first start takes 2 to 3 minutes.
+1. Step 1A: put the card in the Pi and connect power. The first start takes 2 to 3 minutes. (Step 1B: the Pi
+   is already running.)
 2. On the laptop, open **PowerShell** and run:
 
    ```
@@ -50,6 +76,10 @@ Total time: about 1 hour, most of it waiting for the SD card and the installs.
 
    Type `yes` when asked about the fingerprint, then your Pi password. The prompt changes to `ali@bms-pi:~ $`.
    This window is now a terminal on the Pi.
+
+   If `bms-pi.local` is not found, open a terminal on the Pi itself (if it has a screen), run `hostname -I`,
+   and use that address instead: `ssh ali@192.168.137.23`, for example (addresses starting with 192.168.137
+   come from the laptop's shared connection).
 
 ## Step 3. Copy the project to the Pi (1 min)
 
