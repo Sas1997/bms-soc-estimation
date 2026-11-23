@@ -1,0 +1,32 @@
+{
+ "collected_utc": "2026-11-23T23:23:49+00:00",
+ "hostname": "bms-pi",
+ "model": "Raspberry Pi 5 Model B Rev 1.1",
+ "machine": "aarch64",
+ "kernel": "6.18.60+rpt-rpi-2712",
+ "cpus": 4,
+ "python": "3.13.5",
+ "os": "Debian GNU/Linux 13 (trixie)",
+ "memory_gb": 7.9,
+ "code_commit": "24d2f4bd1585",
+ "throttled": "0x0",
+ "ext5v_v": 5.36,
+ "packages": [
+  "Pygments==2.21.0",
+  "flatbuffers==25.12.19",
+  "iniconfig==2.3.1",
+  "numpy==2.5.3",
+  "onnxruntime==1.31.0",
+  "packaging==26.3",
+  "paho-mqtt==2.1.0",
+  "pandas==3.0.5",
+  "pluggy==1.7.0",
+  "protobuf==7.36.2",
+  "pytest==9.1.1",
+  "python-dateutil==4.0.0",
+  "scipy==1.18.1",
+  "smbus2==0.6.1",
+  "tabulate==0.10.0",
+  "tzdata==2026.6"
+ ]
+}

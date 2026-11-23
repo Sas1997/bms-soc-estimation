@@ -1,0 +1,51 @@
+{
+ "run_id": "20261123T221005Z-25degC_UDDS",
+ "finished": true,
+ "samples": 15965,
+ "wall_s": 1596.4,
+ "rmse_pts": {
+  "ekf": 0.866,
+  "lstm": 0.757,
+  "transformer": 1.194,
+  "cc": 20.15
+ },
+ "max_pts": {
+  "ekf": 6.253,
+  "lstm": 2.685,
+  "transformer": 4.432,
+  "cc": 20.352
+ },
+ "ms": {
+  "ekf": {
+   "median": 0.3378,
+   "p99": 0.4112
+  },
+  "lstm": {
+   "median": 0.5663,
+   "p99": 0.6684
+  },
+  "transformer": {
+   "median": 0.7371,
+   "p99": 0.8418
+  },
+  "cc": {
+   "median": 0.003,
+   "p99": 0.0042
+  }
+ },
+ "cpu_c_end": 35.3,
+ "labels": {
+  "ekf": "EKF, 3RC (calibrated)",
+  "lstm": "LSTM",
+  "transformer": "Transformer",
+  "cc": "Coulomb counting",
+  "gauge": "Pack fuel gauge, RelativeStateOfCharge()"
+ },
+ "device": "Raspberry Pi 5 (8 GB)",
+ "hardware_model": "Raspberry Pi 5 Model B Rev 1.1",
+ "code_commit": "24d2f4bd1585",
+ "power_end": {
+  "throttled": "0x0",
+  "ext5v_v": 5.359
+ }
+}

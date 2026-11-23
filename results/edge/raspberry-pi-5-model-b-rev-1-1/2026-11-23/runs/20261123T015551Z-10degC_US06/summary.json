@@ -1,0 +1,45 @@
+{
+ "run_id": "20261123T015551Z-10degC_US06",
+ "finished": true,
+ "samples": 300,
+ "wall_s": 3.0,
+ "rmse_pts": {
+  "ekf": 0.617,
+  "lstm": 1.592,
+  "transformer": 1.329,
+  "cc": 19.982
+ },
+ "max_pts": {
+  "ekf": 7.723,
+  "lstm": 4.918,
+  "transformer": 4.401,
+  "cc": 20.003
+ },
+ "ms": {
+  "ekf": {
+   "median": 0.2202,
+   "p99": 0.2742
+  },
+  "lstm": {
+   "median": 0.354,
+   "p99": 0.4055
+  },
+  "transformer": {
+   "median": 0.4643,
+   "p99": 0.5406
+  },
+  "cc": {
+   "median": 0.0018,
+   "p99": 0.0025
+  }
+ },
+ "cpu_c_end": 38.0,
+ "labels": {
+  "ekf": "EKF, 3RC (calibrated)",
+  "lstm": "LSTM",
+  "transformer": "Transformer",
+  "cc": "Coulomb counting",
+  "gauge": "Pack fuel gauge, RelativeStateOfCharge()"
+ },
+ "device": "Raspberry Pi 5 (8 GB)"
+}

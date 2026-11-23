@@ -1,0 +1,49 @@
+{
+ "run_id": "20261123T232410Z-10degC_US06",
+ "device": "Raspberry Pi 5 Model B Rev 1.1",
+ "host": "bms-pi",
+ "hardware": {
+  "model": "Raspberry Pi 5 Model B Rev 1.1",
+  "machine": "aarch64",
+  "kernel": "6.18.60+rpt-rpi-2712",
+  "cpus": 4,
+  "python": "3.13.5",
+  "os": "Debian GNU/Linux 13 (trixie)",
+  "memory_gb": 7.9,
+  "code_commit": "24d2f4bd1585",
+  "throttled": "0x0",
+  "ext5v_v": 5.363
+ },
+ "offline": true,
+ "broker": null,
+ "cycle": "10degC_US06",
+ "n_samples": 3871,
+ "speed": 1000.0,
+ "soc_error_pts": 20.0,
+ "source": "replay",
+ "live": false,
+ "keys": [
+  "ekf",
+  "lstm",
+  "transformer",
+  "cc"
+ ],
+ "ref_label": "laboratory coulomb counting",
+ "pack": null,
+ "started_utc": "2026-11-23T23:24:10+00:00",
+ "labels": {
+  "ekf": "EKF, 3RC (calibrated)",
+  "lstm": "LSTM",
+  "transformer": "Transformer",
+  "cc": "Coulomb counting",
+  "gauge": "Pack fuel gauge, RelativeStateOfCharge()"
+ },
+ "models": {
+  "ekf": "3rc_dc_dis",
+  "lstm": "lstm_aug",
+  "transformer": "transformer"
+ },
+ "python": "3.13.5",
+ "onnxruntime": "1.31.0",
+ "publish_every_s": 1.0
+}
