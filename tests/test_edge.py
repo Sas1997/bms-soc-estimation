@@ -66,3 +66,12 @@ def test_edge_offline_cli(tmp_path):
     for f in ("samples.csv", "meta.json", "summary.json"):
         (run_dir / f).unlink()
     run_dir.rmdir()
+
+
+def test_hardware_info_reads_the_system():
+    sys.path.insert(0, str(ROOT / "demo"))
+    import edge
+
+    hw = edge.hardware_info()
+    assert {"model", "os", "kernel", "machine", "cpus", "python", "code_commit", "throttled", "ext5v_v"} <= set(hw)
+    assert hw["machine"] and hw["kernel"] and hw["python"]

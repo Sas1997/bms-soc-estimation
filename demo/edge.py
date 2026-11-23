@@ -51,9 +51,11 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import platform
 import signal
 import socket
+import subprocess
 import sys
 import time
 import uuid
@@ -95,6 +97,48 @@ def device_name():
         return Path("/proc/device-tree/model").read_text().strip("\x00").strip()
     except OSError:
         return f"{platform.system()} {platform.machine()}"
+
+
+def _cmd(*args, timeout=5):
+    try:
+        out = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+        return out.stdout.strip() if out.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def power_status():
+    """Raspberry Pi firmware power report (None elsewhere): throttling flags and the 5 V input voltage."""
+    thr = _cmd("vcgencmd", "get_throttled")
+    volt = _cmd("vcgencmd", "pmic_read_adc", "EXT5V_V")
+    v = None
+    if volt and "=" in volt:
+        try:
+            v = round(float(volt.split("=")[-1].rstrip("V")), 3)
+        except ValueError:
+            pass
+    return {"throttled": thr.split("=")[-1] if thr else None, "ext5v_v": v}
+
+
+def hardware_info():
+    """What this process actually ran on, read from the system rather than from the config file."""
+    info = {"model": device_name(), "machine": platform.machine(), "kernel": platform.release(),
+            "cpus": os.cpu_count(), "python": platform.python_version()}
+    try:
+        rel = dict(line.split("=", 1) for line in Path("/etc/os-release").read_text().splitlines() if "=" in line)
+        info["os"] = rel.get("PRETTY_NAME", "").strip('"') or None
+    except OSError:
+        info["os"] = f"{platform.system()} {platform.version()}"
+    try:
+        kb = int(next(l for l in Path("/proc/meminfo").read_text().splitlines() if l.startswith("MemTotal")).split()[1])
+        info["memory_gb"] = round(kb / 1024**2, 1)
+    except (OSError, StopIteration, ValueError):
+        info["memory_gb"] = None
+    commit = _cmd("git", "-C", str(ROOT), "rev-parse", "--short=12", "HEAD")
+    dirty = _cmd("git", "-C", str(ROOT), "status", "--porcelain", "--untracked-files=no")
+    info["code_commit"] = commit + ("+modified" if dirty else "") if commit else None
+    info.update(power_status())
+    return info
 
 
 def r(x, d):
@@ -389,6 +433,8 @@ def main():
     import onnxruntime
 
     meta = {"run_id": run_id, "device": cfg.get("demo", {}).get("device") or device_name(), "host": socket.gethostname(),
+            "hardware": hardware_info(), "offline": args.offline,
+            "broker": None if args.offline else cfg.get("broker", {}).get("host"),
             "cycle": source.name, "n_samples": n, "speed": args.speed, "soc_error_pts": args.soc_error,
             "source": source.kind, "live": getattr(source, "live", False), "keys": run.keys,
             "ref_label": source.ref_label, "pack": pack_info,
@@ -439,7 +485,8 @@ def main():
     stats = run.stats()
     summary = {"run_id": run_id, "finished": not stop["flag"], "samples": k, "wall_s": round(time.time() - t_start, 1),
                "rmse_pts": stats["rmse_pts"], "max_pts": stats["max_pts"], "ms": stats["ms"], "cpu_c_end": cpu_temp_c(),
-               "labels": run.labels, "device": meta["device"]}
+               "labels": run.labels, "device": meta["device"], "hardware_model": meta["hardware"]["model"],
+               "code_commit": meta["hardware"]["code_commit"], "power_end": power_status()}
     if reader is not None:
         b = reader.stats
         summary["smbus"] = {"reads_ok": b.ok, "retried": b.retried, "failed": b.failed, "pec_errors": b.pec_errors,

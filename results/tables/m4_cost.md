@@ -18,7 +18,7 @@ Intel(R) Xeon(R) Processor @ 2.10GHz, x86_64, Python 3.13.18, 1000 steps.
 
 ## raspberry-pi-5
 
-Raspberry Pi 5 Model B (8 GB), Arm Cortex-A76, aarch64, Python 3.13.5, 1000 steps.
+Raspberry Pi 5 Model B Rev 1.1, aarch64, Python 3.13.5, 1000 steps.
 
 | estimator                  |   ms per step (median) |   ms per step (99th pct) |   peak memory (MB) |   stored values |   storage (kB) |
 |:---------------------------|-----------------------:|-------------------------:|-------------------:|----------------:|---------------:|

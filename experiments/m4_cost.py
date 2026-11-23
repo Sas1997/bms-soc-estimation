@@ -134,6 +134,8 @@ def main():
     ap.add_argument("--label", default="laptop")
     ap.add_argument("--steps", type=int, default=1000)
     ap.add_argument("--one", choices=KEYS, help=argparse.SUPPRESS)
+    ap.add_argument("--out", type=Path, default=None,
+                    help="write the CSV here instead of results/ and leave the results table untouched")
     args = ap.parse_args()
     if args.one:
         print(json.dumps(measure(args.one, args.steps)))
@@ -155,6 +157,9 @@ def main():
     df = pd.DataFrame(rows)
     df["label"], df["cpu"], df["machine"] = args.label, cpu_name(), platform.machine()
     df["python"], df["steps"] = platform.python_version(), args.steps
+    if args.out is not None:
+        df.to_csv(args.out, index=False)
+        return
     df.to_csv(ROOT / "results" / f"m4_cost_{args.label}.csv", index=False)
     rebuild_table()
 

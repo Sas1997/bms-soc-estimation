@@ -7,22 +7,30 @@
 <meta name="description" content="Live state-of-charge estimates streamed over MQTT from a Raspberry Pi edge node (bms-soc-estimation).">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/uplot@1.6.32/dist/uPlot.min.css">
 <style>
+  /* Theme: Times New Roman, purple. Series colours validated for colour-vision deficiency
+     (light and dark) with the adjacent-pair check; identity is also carried by the legend and table. */
   :root {
     color-scheme: light;
-    --page: #f9f9f7;
-    --surface-1: #fcfcfb;
-    --text-primary: #0b0b0b;
-    --text-secondary: #52514e;
-    --text-muted: #898781;
-    --grid: #e1e0d9;
-    --axis: #c3c2b7;
-    --border: rgba(11, 11, 11, 0.10);
-    --series-ref: #0b0b0b;
-    --series-ekf: #2a78d6;
+    --serif: "Times New Roman", Times, "Liberation Serif", "Nimbus Roman", serif;
+    --page: #f7f5fa;
+    --surface-1: #ffffff;
+    --band: #4f2683;
+    --band-text: #ffffff;
+    --band-soft: #e3d8f2;
+    --accent: #4f2683;
+    --accent-soft: #f1ecf8;
+    --text-primary: #1a1423;
+    --text-secondary: #4a4458;
+    --text-muted: #857e92;
+    --grid: #e7e2ee;
+    --axis: #c9c1d6;
+    --border: rgba(79, 38, 131, 0.16);
+    --series-ref: #1a1423;
+    --series-ekf: #6250d6;
     --series-lstm: #1baf7a;
     --series-transformer: #eda100;
-    --series-cc: #898781;
-    --series-gauge: #eb6834;
+    --series-cc: #857e92;
+    --series-gauge: #e87ba4;
     --good: #0ca30c;
     --critical: #d03b3b;
     --warning: #fab219;
@@ -30,101 +38,131 @@
   @media (prefers-color-scheme: dark) {
     :root:where(:not([data-theme="light"])) {
       color-scheme: dark;
-      --page: #0d0d0d;
-      --surface-1: #1a1a19;
-      --text-primary: #f0efec;
-      --text-secondary: #c3c2b7;
-      --grid: #2c2c2a;
-      --axis: #383835;
-      --border: rgba(255, 255, 255, 0.10);
-      --series-ref: #f0efec;
-      --series-ekf: #3987e5;
+      --page: #110c18;
+      --surface-1: #1b1525;
+      --band: #2d1650;
+      --band-soft: #cbbbe6;
+      --accent: #b9a3e3;
+      --accent-soft: #241b33;
+      --text-primary: #f1edf7;
+      --text-secondary: #c9bfd9;
+      --text-muted: #948aa5;
+      --grid: #2b2337;
+      --axis: #3a3148;
+      --border: rgba(185, 163, 227, 0.16);
+      --series-ref: #f1edf7;
+      --series-ekf: #9085e9;
       --series-lstm: #199e70;
       --series-transformer: #c98500;
-      --series-gauge: #d95926;
+      --series-cc: #948aa5;
+      --series-gauge: #d55181;
     }
   }
   :root[data-theme="dark"] {
     color-scheme: dark;
-    --page: #0d0d0d;
-    --surface-1: #1a1a19;
-    --text-primary: #f0efec;
-    --text-secondary: #c3c2b7;
-    --grid: #2c2c2a;
-    --axis: #383835;
-    --border: rgba(255, 255, 255, 0.10);
-    --series-ref: #f0efec;
-    --series-ekf: #3987e5;
+    --page: #110c18;
+    --surface-1: #1b1525;
+    --band: #2d1650;
+    --band-soft: #cbbbe6;
+    --accent: #b9a3e3;
+    --accent-soft: #241b33;
+    --text-primary: #f1edf7;
+    --text-secondary: #c9bfd9;
+    --text-muted: #948aa5;
+    --grid: #2b2337;
+    --axis: #3a3148;
+    --border: rgba(185, 163, 227, 0.16);
+    --series-ref: #f1edf7;
+    --series-ekf: #9085e9;
     --series-lstm: #199e70;
     --series-transformer: #c98500;
-    --series-gauge: #d95926;
+    --series-cc: #948aa5;
+    --series-gauge: #d55181;
   }
   * { box-sizing: border-box; }
   body {
     margin: 0; background: var(--page); color: var(--text-primary);
-    font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+    font: 17px/1.5 var(--serif); font-kerning: normal;
   }
-  main { max-width: 1240px; margin: 0 auto; padding: 24px 16px 48px; }
-  header h1 { font-size: 22px; font-weight: 650; margin: 0 0 6px; letter-spacing: -0.01em; }
-  header p { margin: 0; color: var(--text-secondary); max-width: 78ch; }
-  header a { color: inherit; }
-  .status { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0 18px; }
+  .wrap { max-width: 1240px; margin: 0 auto; padding: 0 20px; }
+  .band { background: var(--band); color: var(--band-text); padding: 26px 0 22px; border-bottom: 4px solid var(--accent); }
+  .band .eyebrow { margin: 0 0 4px; font-size: 14px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--band-soft); }
+  .band h1 { margin: 0 0 8px; font-size: 34px; font-weight: 700; line-height: 1.15; }
+  .band .lede { margin: 0; max-width: 82ch; color: var(--band-soft); font-size: 17px; }
+  .band .byline { margin: 12px 0 0; font-size: 16px; color: var(--band-text); }
+  .band .byline a { color: var(--band-text); text-underline-offset: 3px; }
+  .band .byline .sep { margin: 0 8px; color: var(--band-soft); }
+  main.wrap { padding-top: 20px; padding-bottom: 48px; }
+  .status { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 18px; }
   .chip {
-    display: inline-flex; align-items: center; gap: 7px; padding: 5px 11px;
-    border: 1px solid var(--border); border-radius: 999px; background: var(--surface-1);
-    color: var(--text-secondary); font-size: 13px; white-space: nowrap;
+    display: inline-flex; align-items: center; gap: 7px; padding: 4px 12px;
+    border: 1px solid var(--border); border-radius: 3px; background: var(--accent-soft);
+    color: var(--text-secondary); font-size: 15px; white-space: nowrap;
   }
-  .chip b { color: var(--text-primary); font-weight: 600; }
+  .chip b { color: var(--text-primary); font-weight: 700; }
   .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--text-muted); flex: none; }
   .dot.good { background: var(--good); }
   .dot.critical { background: var(--critical); }
   .dot.warning { background: var(--warning); }
-  .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
-  .tiles { display: grid; grid-template-columns: repeat(var(--ntiles, 5), minmax(0, 1fr)); gap: 10px; margin-bottom: 12px; }
+  .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 3px; padding: 14px 18px; }
+  .tiles { display: grid; grid-template-columns: repeat(var(--ntiles, 5), minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
+  .tile { border-top: 3px solid var(--accent); }
   .tile.hidden { display: none; }
-  .tile .name { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--text-secondary); }
-  .swatch { width: 14px; height: 3px; border-radius: 2px; flex: none; }
+  .tile .name { display: flex; align-items: center; gap: 7px; font-size: 15px; color: var(--text-secondary); }
+  .swatch { width: 16px; height: 3px; border-radius: 1px; flex: none; }
   .swatch.dashed { background: repeating-linear-gradient(90deg, var(--series-cc) 0 5px, transparent 5px 8px) !important; }
-  .tile .value { font-size: 30px; font-weight: 600; letter-spacing: -0.02em; margin-top: 2px; }
-  .tile .value small { font-size: 16px; font-weight: 500; color: var(--text-secondary); }
-  .tile .sub { font-size: 13px; color: var(--text-secondary); }
+  .tile .value { font-size: 36px; font-weight: 700; margin-top: 2px; font-variant-numeric: lining-nums tabular-nums; }
+  .tile .value small { font-size: 18px; font-weight: 400; color: var(--text-secondary); }
+  .tile .sub { font-size: 15px; color: var(--text-secondary); }
   .grid2 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
   .chart-card { margin-bottom: 12px; }
-  .chart-card h2 { font-size: 14px; font-weight: 600; margin: 0 0 2px; }
-  .chart-card .note { font-size: 12.5px; color: var(--text-secondary); margin: 0 0 6px; }
+  h2 { font-size: 19px; font-weight: 700; margin: 0 0 2px; color: var(--accent); }
+  .chart-card .note { font-size: 15px; color: var(--text-secondary); margin: 0 0 6px; font-style: italic; }
   .plot { width: 100%; min-height: 120px; }
-  .u-legend { color: var(--text-secondary); font-size: 12.5px; text-align: left; }
-  .u-legend .u-value { color: var(--text-primary); font-variant-numeric: tabular-nums; }
-  .u-legend th { font-weight: 500; }
-  .u-legend .u-marker { width: 14px; height: 3px; border-width: 0; }
+  .u-legend { color: var(--text-secondary); font: 15px var(--serif); text-align: left; }
+  .u-legend .u-value { color: var(--text-primary); font-variant-numeric: lining-nums tabular-nums; }
+  .u-legend th { font-weight: 400; }
+  .u-legend .u-marker { width: 16px; height: 3px; border-width: 0; }
   .table-wrap { overflow-x: auto; }
-  table { width: 100%; border-collapse: collapse; font-size: 14px; }
-  th, td { padding: 8px 10px; text-align: right; border-bottom: 1px solid var(--grid); }
+  table { width: 100%; border-collapse: collapse; font-size: 16px; }
+  th, td { padding: 7px 10px; text-align: right; border-bottom: 1px solid var(--grid); }
+  thead th { border-bottom: 2px solid var(--accent); }
   th:first-child, td:first-child { text-align: left; }
-  th { color: var(--text-secondary); font-weight: 500; }
-  td { font-variant-numeric: tabular-nums; }
+  th { color: var(--text-secondary); font-weight: 700; }
+  td { font-variant-numeric: lining-nums tabular-nums; }
+  .prov { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px 28px; margin: 6px 0 0; }
+  .prov div { display: flex; gap: 10px; padding: 5px 0; border-bottom: 1px solid var(--grid); }
+  .prov dt { flex: 0 0 150px; color: var(--text-secondary); margin: 0; }
+  .prov dd { margin: 0; color: var(--text-primary); overflow-wrap: anywhere; }
+  .prov a, footer a, .setup a { color: var(--accent); text-underline-offset: 3px; }
   .setup { display: none; }
   .setup.show { display: block; margin-bottom: 14px; }
-  .setup code { font-size: 13px; }
-  footer { margin-top: 18px; color: var(--text-secondary); font-size: 13px; }
-  footer p { margin: 4px 0; max-width: 100ch; }
-  footer a { color: inherit; }
+  code { font-size: 14px; }
+  footer { border-top: 1px solid var(--border); margin-top: 22px; padding-top: 12px; color: var(--text-secondary); font-size: 15px; }
+  footer p { margin: 4px 0; max-width: 110ch; }
   @media (max-width: 900px) {
+    .band h1 { font-size: 27px; }
     .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .tiles .tile:first-child { grid-column: 1 / -1; }
     .grid2 { grid-template-columns: 1fr; }
+    .prov { grid-template-columns: 1fr; }
+    .prov dt { flex-basis: 120px; }
   }
 </style>
 </head>
 <body>
-<main>
-  <header>
-    <h1>Live state-of-charge estimation at the edge</h1>
-    <p>A single-board computer takes Li-ion cell measurements (a replayed laboratory drive cycle, or a smart
-      battery read over SMBus), estimates state of charge on the device, and streams measurements and estimates
-      here over MQTT.
-      Code and method: <a href="https://github.com/SAS1997/bms-soc-estimation">bms-soc-estimation</a>.</p>
-  </header>
+<header class="band">
+  <div class="wrap">
+    <p class="eyebrow">Battery management systems · edge computing</p>
+    <h1>Live State-of-Charge Estimation at the Edge</h1>
+    <p class="lede">A Raspberry Pi 5 takes Li-ion cell measurements (a replayed laboratory drive cycle, or a smart
+      battery read over SMBus), runs four state-of-charge estimators on the device, and streams the measurements
+      and estimates to this page through a cloud MQTT broker.</p>
+    <p class="byline">Seyyed Ali Sadat<span class="sep">·</span>Western University<span class="sep">·</span><a
+      href="https://github.com/Sas1997/bms-soc-estimation">Code, method and results on GitHub</a></p>
+  </div>
+</header>
+<main class="wrap">
 
   <div class="status" aria-live="polite">
     <span class="chip"><span class="dot" id="dot-broker"></span>Cloud broker: <b id="st-broker">connecting</b></span>
@@ -182,11 +220,28 @@
     </table></div>
   </section>
 
+  <section class="card chart-card">
+    <h2>Where this run was computed</h2>
+    <p class="note">Read by the edge device from its own system at the start of the run, not typed in by hand.</p>
+    <dl class="prov">
+      <div><dt>Board</dt><dd id="pv-board">-</dd></div>
+      <div><dt>Operating system</dt><dd id="pv-os">-</dd></div>
+      <div><dt>Kernel</dt><dd id="pv-kernel">-</dd></div>
+      <div><dt>CPU cores / memory</dt><dd id="pv-cpu">-</dd></div>
+      <div><dt>Runtime</dt><dd id="pv-rt">-</dd></div>
+      <div><dt>Code version</dt><dd id="pv-code">-</dd></div>
+      <div><dt>Power supply</dt><dd id="pv-power">-</dd></div>
+      <div><dt>Run</dt><dd id="pv-run">-</dd></div>
+    </dl>
+  </section>
+
   <footer>
     <p id="ft-meta"></p>
     <p>Data: P. Kollmeyer, M. Naguib, M. Skells, LG 18650HG2 Li-ion Battery Data, Mendeley Data, V2, 2020,
       doi:10.17632/b5mj79w5w9.2, CC BY 4.0 (excerpt resampled to 1 Hz). All replayed cycles are test cycles that
       no estimator was fitted or tuned on.</p>
+    <p>© 2026 Seyyed Ali Sadat. Code under the GNU AGPL-3.0:
+      <a href="https://github.com/Sas1997/bms-soc-estimation">github.com/Sas1997/bms-soc-estimation</a>.</p>
   </footer>
 </main>
 
@@ -245,8 +300,8 @@
   let dirty = false;
 
   function axis(label) {
-    return { label, stroke: css("--text-secondary"), labelSize: 18, size: 46, font: "12px system-ui, sans-serif",
-      labelFont: "12px system-ui, sans-serif", grid: { stroke: css("--grid"), width: 1 }, ticks: { stroke: css("--axis"), width: 1, size: 4 } };
+    return { label, stroke: css("--text-secondary"), labelSize: 18, size: 46, font: '14px "Times New Roman", Times, serif',
+      labelFont: '14px "Times New Roman", Times, serif', grid: { stroke: css("--grid"), width: 1 }, ticks: { stroke: css("--axis"), width: 1, size: 4 } };
   }
   const fmt = (d) => (u, v) => (v == null ? "-" : v.toFixed(d));
 
@@ -363,8 +418,34 @@
     $("note-soc").textContent = `The EKF and coulomb counting start ${m.soc_error_pts} points below the ` +
       (m.live ? "gauge's own SoC" : "true SoC") + "; the networks need no initial state." +
       (hasGauge() ? " The fuel gauge reports whole percent." : "");
-    $("ft-meta").textContent = `Run ${m.run_id} on ${m.device} (host ${m.host}), started ${m.started_utc}. ` +
+    renderProvenance(m);
+    $("ft-meta").textContent = `Run ${m.run_id} on ${(m.hardware && m.hardware.model) || m.device} (host ${m.host}), started ${m.started_utc}. ` +
       `EKF model ${m.models.ekf}; networks ${m.models.lstm} and ${m.models.transformer} run with ONNX Runtime ${m.onnxruntime}; Python ${m.python}.`;
+  }
+
+  const REPO = "https://github.com/Sas1997/bms-soc-estimation";
+  function renderProvenance(m) {
+    const h = m.hardware || {};
+    const set = (id, v) => { $(id).textContent = v == null || v === "" ? "not reported" : v; };
+    set("pv-board", h.model || m.device);
+    set("pv-os", h.os);
+    set("pv-kernel", h.kernel && `${h.kernel} (${h.machine})`);
+    set("pv-cpu", h.cpus && `${h.cpus} cores / ${h.memory_gb} GB`);
+    set("pv-rt", `Python ${m.python}, ONNX Runtime ${m.onnxruntime}`);
+    set("pv-power", h.ext5v_v != null ? `${h.ext5v_v.toFixed(2)} V at the board; throttling flags ${h.throttled}` +
+      (h.throttled === "0x0" ? " (no under-voltage)" : "") : null);
+    set("pv-run", `${m.run_id}, started ${m.started_utc}` + (m.broker ? `, streamed via ${m.broker}` : ""));
+    const code = $("pv-code");
+    code.textContent = "";
+    if (h.code_commit) {
+      const sha = h.code_commit.replace("+modified", "");
+      const a = document.createElement("a");
+      a.href = `${REPO}/commit/${sha}`;
+      a.textContent = `commit ${sha}`;
+      code.append(a, h.code_commit.endsWith("+modified") ? " with local changes" : "");
+    } else {
+      code.textContent = "not reported";
+    }
   }
 
   function setChip(dotId, textId, cls, text) {
@@ -373,7 +454,8 @@
   }
 
   function renderEdge() {
-    if (st.online === true) setChip("dot-edge", "st-edge", "good", (st.meta && st.meta.device) || "online");
+    if (st.online === true) setChip("dot-edge", "st-edge", "good",
+      (st.meta && ((st.meta.hardware && st.meta.hardware.model) || st.meta.device)) || "online");
     else if (st.online === false) setChip("dot-edge", "st-edge", "critical", st.summary ? "offline, showing the last run" : "offline");
   }
 

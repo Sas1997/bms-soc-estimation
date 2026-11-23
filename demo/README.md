@@ -202,6 +202,23 @@ GitHub Pages serves `docs/` as a public web page for free when the repository is
 The broker keeps the last run (retained messages), so the page shows the most recent run with its metrics even
 when the Pi is off.
 
+## Step 10b. Record what ran on the Pi (5 min)
+
+The edge node records the hardware it runs on by itself: every run's `meta.json` holds the board model read from
+`/proc/device-tree/model`, the operating system, kernel, memory, the power supply's voltage and throttling flags
+(from `vcgencmd`), and the git commit of the code. The dashboard shows the same under "Where this run was
+computed". To commit a record of the Pi's work to the repository, run on the Pi after your runs:
+
+```
+python demo/collect_evidence.py
+```
+
+It runs the test suite and the cost measurement on the Pi, makes one offline check run, and writes
+`results/edge/<board>/<date>/` with a generated README, `system.json`, `tests.txt`, `cost.csv`, the logs of
+every edge run from the last 7 days (same run IDs as the dashboard), and `sha256sums.txt`. It never reads
+`demo/config.toml`, so no password is copied. At the end it prints the two commands to run in PowerShell, in
+the repository folder on the laptop, to copy the folder over; then commit and push it with GitHub Desktop.
+
 ## Step 11 (optional). Read a real smart battery over SMBus
 
 No pack yet? Everything below also runs on an emulated pack:
