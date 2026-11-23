@@ -4,10 +4,9 @@
 // credential with the permission "Subscribe only" here, never the edge device's
 // publishing credential.
 window.BMS_CONFIG = {
-  host: "",                          // broker address, without https://
-  port: 8084,                        // MQTT over secure WebSocket (EMQX Serverless: 8084)
-  path: "/mqtt",
-  username: "",                      // subscribe-only username
-  password: "",                      // subscribe-only password
+  host: "wfa61d72.ala.us-east-1.emqxsl.com",
+  port: 8084,
+  username: "bms-dashboard",
+  password: "bmsview-oeYHa5a9xwtSu4",
   topic: "bms-soc-estimation/demo",  // must match [demo] topic in demo/config.toml
 };
