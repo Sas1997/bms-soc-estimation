@@ -6,6 +6,8 @@ Self-directed project by Seyyed Ali Sadat (Western University), built to learn c
 
 ![Headline results](results/figures/headline.png)
 
+**Live dashboard:** [sas1997.github.io/bms-soc-estimation](https://sas1997.github.io/bms-soc-estimation/) shows the most recent run streamed from the Raspberry Pi 5.
+
 ## Result in one table
 
 SoC error in percentage points on test data that no estimator was fitted, calibrated, tuned or selected on. Mean over cycles.
