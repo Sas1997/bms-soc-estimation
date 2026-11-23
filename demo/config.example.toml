@@ -1,9 +1,9 @@
 # Copy this file to demo/config.toml (which is never committed) and fill in the
-# values from your HiveMQ Cloud console. Use the credential with permission
-# "Publish and Subscribe" here; the dashboard uses a separate "Subscribe only" one.
+# values from your MQTT broker's console (for example EMQX Serverless). Use the Pi's login
+# (bms-pi, allowed to publish) here; the dashboard uses a separate read-only login.
 
 [broker]
-host = "your-cluster-id.s1.eu.hivemq.cloud"   # Cluster URL from the HiveMQ console
+host = "your-broker-address"                  # broker host name, without https://
 port = 8883                                   # MQTT over TLS
 username = "your-publisher-username"
 password = "your-publisher-password"

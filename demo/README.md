@@ -1,17 +1,17 @@
-# Edge and cloud demo: Raspberry Pi 5 + HiveMQ Cloud + live dashboard
+# Edge and cloud demo: Raspberry Pi 5 + cloud MQTT broker + live dashboard
 
 The Raspberry Pi replays a test drive cycle one second at a time, as if the measurements came from a live
 Li-ion cell, and runs four SoC estimators on the device: the calibrated EKF, the LSTM and the Transformer
 (as ONNX models in ONNX Runtime, no PyTorch needed), and coulomb counting. It streams measurements and
-estimates over MQTT with TLS to a free HiveMQ Cloud broker. A web page (`docs/index.html`) subscribes over a
+estimates over MQTT with TLS to a free cloud MQTT broker (EMQX Serverless). A web page (`docs/index.html`) subscribes over a
 secure WebSocket and plots everything live. This mirrors a cloud-connected BMS: estimation at the edge,
 logging and monitoring in the cloud. Instead of a replay, the Pi can also read a real smart battery pack over
 its SMBus data port (step 11).
 
 ```
- Raspberry Pi 5                         HiveMQ Cloud (free)              Browser
+ Raspberry Pi 5                         EMQX Serverless (free)           Browser
  demo/edge.py                           MQTT broker                      docs/index.html
- replay -> EKF, LSTM, Transformer, CC   ---- MQTT over TLS, 8883 ---->   ---- secure WebSocket, 8884 ---->
+ replay -> EKF, LSTM, Transformer, CC   ---- MQTT over TLS, 8883 ---->   ---- secure WebSocket, 8084 ---->
  local log in demo/runs/                retained: meta, history, summary  live charts and metrics
 ```
 
@@ -122,15 +122,23 @@ the whole edge loop on the 10 °C US06 cycle without network (under a minute) an
 
 ## Step 6. Create the cloud broker (10 min)
 
-1. Go to <https://console.hivemq.cloud>, sign up, and choose the **Serverless** plan (free, no credit card).
-   Create a cluster.
-2. Open the cluster details and copy the **Cluster URL** (it ends in `.hivemq.cloud`). The ports are **8883**
-   for MQTT and **8884** for WebSocket.
-3. Open **Access Management**, then **Credentials**, and add two:
-   - username `bms-pi`, a password, permission **Publish and Subscribe** (for the Pi)
-   - username `bms-dashboard`, a different password, permission **Subscribe Only** (for the web page)
+The demo works with any MQTT broker that offers MQTT over TLS and MQTT over secure WebSocket with username
+and password login. These steps use EMQX Serverless, which has a free monthly quota (1 million session minutes,
+1 GB of traffic) and needs no credit card. HiveMQ Cloud Serverless, used in earlier versions of this guide, no
+longer accepts new clusters and is retired on 2026-12-31.
 
-On the free plan a permission applies to every topic on the cluster, so use this cluster for this demo only.
+1. Go to <https://www.emqx.com/en/cloud/serverless-mqtt>, sign up, and create a **Serverless** deployment.
+   Keep the monthly **spend limit at 0**, so it stays inside the free quota.
+2. Open the deployment's **Overview** and copy its **Address** (the broker host name). The ports are **8883**
+   for MQTT over TLS and **8084** for secure WebSocket.
+3. Open **Access Control**, then **Authentication**, and add two users:
+   - username `bms-pi`, with a password (for the Pi)
+   - username `bms-dashboard`, with a different password (for the web page)
+4. Recommended: in **Access Control**, then **Authorization**, add a rule for username `bms-dashboard`, topic
+   `#`, action **Publish**, permission **Deny**, so the public web page's login can only read.
+
+A free run of the demo uses a few megabytes of traffic; the largest message (the retained history) is about
+125 kB, under the broker's 1 MB limit.
 
 ## Step 7. Point the Pi at the broker (2 min)
 
@@ -141,7 +149,7 @@ cp demo/config.example.toml demo/config.toml
 nano demo/config.toml
 ```
 
-Replace the three example values: `host` with the Cluster URL (no `https://`), `username` with `bms-pi`, and
+Replace the three example values: `host` with the broker address (no `https://`), `username` with `bms-pi`, and
 `password` with its password. Save with `Ctrl+O`, `Enter`, then exit with `Ctrl+X`. This file stays on the Pi:
 git ignores it.
 
@@ -150,7 +158,7 @@ git ignores it.
 On the laptop:
 
 1. Unzip `bms-soc-estimation-repo.zip` (right-click, Extract All).
-2. Open `docs\config.js` in Notepad. Fill in `host` (the Cluster URL), `username: "bms-dashboard"` and its
+2. Open `docs\config.js` in Notepad. Fill in `host` (the broker address), `username: "bms-dashboard"` and its
    password. Save.
 3. Double-click `docs\index.html`. It opens in your browser and should show **Cloud broker: connected**.
 
@@ -283,7 +291,7 @@ manual), which matters for the EKF and the networks at low temperature.
 | `MQTT connection failed: Not authorized` | Username or password in `demo/config.toml` does not match the `bms-pi` credential. |
 | `MQTT connection failed` with a certificate or TLS error | The Pi's clock is wrong. Run `timedatectl`; it should say `System clock synchronized: yes` once the Pi is online. |
 | Dashboard says `not configured` | `docs/config.js` still has an empty `host` or `username`. |
-| Dashboard stays on `reconnecting` | Wrong Cluster URL or password in `docs/config.js`, or a network that blocks port 8884. |
+| Dashboard stays on `reconnecting` | Wrong broker address or password in `docs/config.js`, or a network that blocks port 8084. |
 | `pip install` is slow | Normal on the first install. |
 | The Pi switches itself off (red light) after a few seconds or minutes | The power supply cannot hold 5 V under load. Use the official Raspberry Pi 27 W USB-C supply (or another good USB-C supply with a USB-C cable, not a USB-A adapter). Check with `vcgencmd pmic_read_adc EXT5V_V`: about 5.1 V is healthy. |
 | `smbus_log.py`: `Remote I/O error` | No answer at 0x0b: check SDA/SCL are not swapped, ground is connected, and the pack is awake (step 11). |

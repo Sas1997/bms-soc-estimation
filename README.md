@@ -146,9 +146,9 @@ The slowest estimator, the Transformer, takes under 0.5 ms of each 1,000 ms samp
 A small version of a cloud-connected BMS: estimation on an edge device, monitoring in the cloud. Setup guide: [demo/README.md](demo/README.md).
 
 ```
- Raspberry Pi 5                         HiveMQ Cloud (free)              Browser
+ Raspberry Pi 5                         EMQX Serverless (free)           Browser
  demo/edge.py                           MQTT broker                      docs/index.html
- replay -> EKF, LSTM, Transformer, CC   ---- MQTT over TLS, 8883 ---->   ---- secure WebSocket, 8884 ---->
+ replay -> EKF, LSTM, Transformer, CC   ---- MQTT over TLS, 8883 ---->   ---- secure WebSocket, 8084 ---->
  local log in demo/runs/                retained: meta, history, summary  live charts and metrics
 ```
 

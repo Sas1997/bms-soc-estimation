@@ -1,11 +1,11 @@
 // Dashboard connection settings (see demo/README.md, step 7).
 //
-// This file is public once the repository is on GitHub, so use a HiveMQ Cloud
+// This file is public once the repository is on GitHub, so use a broker
 // credential with the permission "Subscribe only" here, never the edge device's
 // publishing credential.
 window.BMS_CONFIG = {
-  host: "",                          // Cluster URL from the HiveMQ console, without https://
-  port: 8884,                        // MQTT over secure WebSocket
+  host: "",                          // broker address, without https://
+  port: 8084,                        // MQTT over secure WebSocket (EMQX Serverless: 8084)
   path: "/mqtt",
   username: "",                      // subscribe-only username
   password: "",                      // subscribe-only password

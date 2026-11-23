@@ -138,7 +138,7 @@
   </div>
 
   <div class="card setup" id="setup">
-    <b>Not configured.</b> Fill in <code>docs/config.js</code> with the HiveMQ Cloud cluster URL, the
+    <b>Not configured.</b> Fill in <code>docs/config.js</code> with the MQTT broker address, the
     subscribe-only username and password, and the topic, as described in <code>demo/README.md</code>.
   </div>
 
@@ -204,7 +204,7 @@
   const hasGauge = () => KEYS.includes("gauge");
 
   // ---------------------------------------------------------------- config
-  const cfg = Object.assign({ port: 8884, path: "/mqtt", topic: "bms-soc-estimation/demo", tls: true }, window.BMS_CONFIG || {});
+  const cfg = Object.assign({ port: 8084, path: "/mqtt", topic: "bms-soc-estimation/demo", tls: true }, window.BMS_CONFIG || {});
   const q = new URLSearchParams(location.search);
   for (const [k, key] of [["host", "host"], ["port", "port"], ["user", "username"], ["pass", "password"], ["topic", "topic"], ["path", "path"]]) {
     if (q.get(k)) cfg[key] = q.get(k);
