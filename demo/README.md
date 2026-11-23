@@ -106,7 +106,7 @@ pip install -r demo/requirements-pi.txt
 python -m pytest -q
 ```
 
-The last line should end with `66 passed, 3 skipped` (the three skipped tests need PyTorch or h5py, which the
+The last line should end with `67 passed, 3 skipped` (the three skipped tests need PyTorch or h5py, which the
 Pi does not need). After you log in again later, run `cd bms-soc-estimation` and
 `source ~/bms-venv/bin/activate` before any `python` command.
 

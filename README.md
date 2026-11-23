@@ -156,9 +156,29 @@ A small version of a cloud-connected BMS: estimation on an edge device, monitori
 - **Networks without PyTorch.** The PyPI build of PyTorch for Linux ARM64 is 484 MB and depends on CUDA libraries a Pi cannot use. The selected networks are exported to ONNX (23 kB and 99 kB) and run in ONNX Runtime (a 23 MB package); the exported models reproduce PyTorch to within 5 × 10⁻⁷ SoC on every sample of a test cycle ([results/tables/m5_onnx_export.md](results/tables/m5_onnx_export.md)).
 - **Data on the device.** Three test cycles at 1 Hz ship in `demo/replay/` (25 °C UDDS, -20 °C UDDS, 10 °C US06), a small attributed excerpt of the dataset under its CC BY 4.0 licence, so the Pi needs neither the raw data nor the processing pipeline.
 - **Cloud** (`docs/index.html`): a static page served by GitHub Pages that subscribes with a read-only credential and plots SoC, SoC error, voltage, current and temperature, with a metrics table (RMSE, maximum error, compute time per step on the device).
-- **Tested** end to end in this repository against a local MQTT broker (TCP and WebSocket listeners), with the dashboard in headless Chrome: live updates, joining mid-run, and opening after the run from retained messages. The install was rehearsed in a clean environment with only `demo/requirements-pi.txt` (no PyTorch, no dataset): 66 tests pass.
+- **Tested** end to end in this repository against a local MQTT broker (TCP and WebSocket listeners), with the dashboard in headless Chrome: live updates, joining mid-run, and opening after the run from retained messages. The install was rehearsed in a clean environment with only `demo/requirements-pi.txt` (no PyTorch, no dataset): 67 tests pass.
 - **Provenance recorded by the device.** Each run logs the board model, operating system, kernel, supply voltage and throttling flags, and the git commit of the code, read from the system rather than from a config file; the dashboard shows them. `demo/collect_evidence.py` gathers the runs, the on-device test output and cost measurements, with checksums, into `results/edge/`.
-- **Run on a Raspberry Pi 5** (Raspberry Pi OS Trixie, installed from `demo/requirements-pi.txt`): 66 tests pass, and the edge loop on the 10 °C US06 cycle, with the EKF and coulomb counting started 20 points low, gives the same errors as on the development machine (RMSE 3.57 EKF, 1.72 LSTM, 1.41 Transformer, 19.78 coulomb counting) at 0.20, 0.35 and 0.45 ms per step for the EKF, LSTM and Transformer, with the CPU at 37 °C. A Pi 5 needs a supply that holds 5 V under load: a generic 5 V, 3 A USB-A adapter made it switch itself off at random; with another charger it ran normally (5.33 V measured at the board).
+- **Run on a Raspberry Pi 5** (Raspberry Pi OS Trixie, installed from `demo/requirements-pi.txt`): the test suite passes, and the edge loop on the 10 °C US06 cycle, with the EKF and coulomb counting started 20 points low, gives the same errors as on the development machine (RMSE 3.57 EKF, 1.72 LSTM, 1.41 Transformer, 19.78 coulomb counting) at 0.20, 0.35 and 0.45 ms per step for the EKF, LSTM and Transformer, with the CPU at 37 °C. A Pi 5 needs a supply that holds 5 V under load: a generic 5 V, 3 A USB-A adapter made it switch itself off at random; with another charger it ran normally (5.33 V measured at the board).
+
+### Evidence from the Raspberry Pi 5
+
+![Raspberry Pi 5 running the edge node, with the live dashboard and the repository on screen](docs/img/pi5-setup-wide.jpg)
+
+![Screen recording of the dashboard during a live run streamed from the Pi](docs/media/pi5-live-run.gif)
+
+The recording ([MP4](docs/media/pi5-live-run.mp4)) shows run `20261123T225602Z-25degC_UDDS` streaming from the Pi; the "Where this run was computed" panel shows what the Pi read from its own system. The same run's log, with every other file the Pi produced, is in [`results/edge/raspberry-pi-5-model-b-rev-1-1/2026-11-23/`](results/edge/raspberry-pi-5-model-b-rev-1-1/2026-11-23/), written on the device by `demo/collect_evidence.py` and listed with SHA-256 checksums (`sha256sum -c sha256sums.txt` verifies all 22 files).
+
+| What the Pi recorded | Value |
+|:--|:--|
+| Board, read from `/proc/device-tree/model` | Raspberry Pi 5 Model B Rev 1.1, 4 cores, 7.9 GB |
+| System | Debian GNU/Linux 13 (trixie), kernel 6.18.60+rpt-rpi-2712, Python 3.13.5 |
+| Code | commit `24d2f4bd1585`, no local changes |
+| Power | 5.36 V at the board, throttling flags 0x0 (no under-voltage since boot) |
+| Test suite on the Pi | 67 passed, 3 skipped |
+| Two full live runs, 25 °C UDDS, 15,965 samples each, streamed to the cloud broker | RMSE 0.87 EKF, 0.76 LSTM, 1.19 Transformer, 20.15 coulomb counting (EKF and coulomb counting started 20 points low); 0.34 to 0.35, 0.56 to 0.57 and 0.74 to 0.76 ms per step for the EKF, LSTM and Transformer while publishing; CPU 35 to 37 °C |
+| Offline check run, 10 °C US06 | RMSE 3.57, 1.72, 1.41, 19.78: the same as on the development machine |
+
+![Close-up of the Raspberry Pi 5 with the dashboard showing "Edge device: Raspberry Pi 5 Model B Rev 1.1"](docs/img/pi5-setup.jpg)
 
 ## Smart battery over SMBus
 
@@ -302,6 +322,10 @@ run_all.py      one-command reproduction
 - Texas Instruments, *BQ4050 Technical Reference Manual*, SLUUAQ3A, 2022; *BQ40Z80 Technical Reference Manual*, SLUUBT5C, 2021. (vendor register layouts)
 - Texas Instruments, *bq27426 Technical Reference*, SLUUBB0, 2015.
 - E. Chemali, P. J. Kollmeyer, M. Preindl, R. Ahmed, A. Emadi, "Long short-term memory networks for accurate state-of-charge estimation of Li-ion batteries," *IEEE Transactions on Industrial Electronics*, vol. 65, no. 8, pp. 6730-6739, 2018.
+
+## Acknowledgements
+
+Thanks to David Liu, technical staff at Western University, for lending the Raspberry Pi 5.
 
 ## License
 
