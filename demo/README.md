@@ -285,5 +285,6 @@ manual), which matters for the EKF and the networks at low temperature.
 | Dashboard says `not configured` | `docs/config.js` still has an empty `host` or `username`. |
 | Dashboard stays on `reconnecting` | Wrong Cluster URL or password in `docs/config.js`, or a network that blocks port 8884. |
 | `pip install` is slow | Normal on the first install. |
+| The Pi switches itself off (red light) after a few seconds or minutes | The power supply cannot hold 5 V under load. Use the official Raspberry Pi 27 W USB-C supply (or another good USB-C supply with a USB-C cable, not a USB-A adapter). Check with `vcgencmd pmic_read_adc EXT5V_V`: about 5.1 V is healthy. |
 | `smbus_log.py`: `Remote I/O error` | No answer at 0x0b: check SDA/SCL are not swapped, ground is connected, and the pack is awake (step 11). |
 | `smbus_log.py`: `PEC mismatch` keeps repeating | Noise on the bus: shorter wires, slower bus (step 11), or `--pec off` to see whether the gauge sends PEC at all. |

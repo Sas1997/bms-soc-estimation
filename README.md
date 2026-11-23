@@ -10,15 +10,15 @@ Self-directed project by Seyyed Ali Sadat (Western University), built to learn c
 
 SoC error in percentage points on test data that no estimator was fitted, calibrated, tuned or selected on. Mean over cycles.
 
-| Estimator | RMSE, unseen cycles | RMSE, unseen temperature (10 °C) | Max error, unseen cycles | RMSE, started under load 20 points low | RMSE, +100 mA current bias | Time per 1 Hz step |
+| Estimator | RMSE, unseen cycles | RMSE, unseen temperature (10 °C) | Max error, unseen cycles | RMSE, started under load 20 points low | RMSE, +100 mA current bias | Time per 1 Hz step, Raspberry Pi 5 |
 |:--|--:|--:|--:|--:|--:|--:|
-| Coulomb counting | 0.11 | 0.30 | 0.18 | 19.97 | 4.62 | under 0.001 ms |
-| EKF, 2RC (HPPC only) | 0.55 | 0.51 | 0.89 | 6.08 | 3.46 | 0.06 ms |
-| EKF, 3RC (calibrated) | 1.14 | 1.78 | 1.96 | 2.59 | 1.93 | 0.06 ms |
-| LSTM, 4,769 parameters | 1.38 | 1.45 | 4.90 | **1.53** | **1.84** | 0.22 ms |
-| Transformer, 17,697 parameters | 1.62 | 1.40 | 5.93 | 1.83 | 1.95 | 0.31 ms |
+| Coulomb counting | 0.11 | 0.30 | 0.18 | 19.97 | 4.62 | 0.001 ms |
+| EKF, 2RC (HPPC only) | 0.55 | 0.51 | 0.89 | 6.08 | 3.46 | 0.15 ms |
+| EKF, 3RC (calibrated) | 1.14 | 1.78 | 1.96 | 2.59 | 1.93 | 0.15 ms |
+| LSTM, 4,769 parameters | 1.38 | 1.45 | 4.90 | **1.53** | **1.84** | 0.33 ms (ONNX Runtime) |
+| Transformer, 17,697 parameters | 1.62 | 1.40 | 5.93 | 1.83 | 1.95 | 0.44 ms (ONNX Runtime) |
 
-The two robustness columns are on the unseen-cycle set. "Max error" is the mean over cycles of each cycle's largest error. Timing is from a cloud virtual machine (Intel Xeon, 2.30 GHz, one thread). Full tables: [results/tables/m4_summary.md](results/tables/m4_summary.md), [results/tables/m4_cost.md](results/tables/m4_cost.md).
+The two robustness columns are on the unseen-cycle set. "Max error" is the mean over cycles of each cycle's largest error. Timing is the median time per step on a Raspberry Pi 5 (8 GB), one thread; every estimator uses under 0.05 % of the 1 s sample period. Full tables: [results/tables/m4_summary.md](results/tables/m4_summary.md), [results/tables/m4_cost.md](results/tables/m4_cost.md).
 
 What the numbers say:
 
@@ -129,6 +129,18 @@ python experiments/m4_cost.py --label raspberry-pi-5
 
 On a device without PyTorch the networks are measured as ONNX models in ONNX Runtime, which is how they run in the edge demo below. On the cloud virtual machine ONNX Runtime halves the networks' time per step (LSTM 0.30 to 0.14 ms, Transformer 0.35 to 0.18 ms) and cuts the process's peak memory from about 680 MB to 220 MB.
 
+On the Raspberry Pi 5 (8 GB, Raspberry Pi OS Trixie, Python 3.13, one thread):
+
+| Estimator | ms per step, median | ms per step, 99th percentile | Peak memory of the process |
+|:--|--:|--:|--:|
+| Coulomb counting | 0.001 | 0.001 | 110 MB |
+| EKF, 2RC (HPPC only) | 0.15 | 0.17 | 110 MB |
+| EKF, 3RC (calibrated) | 0.15 | 0.17 | 110 MB |
+| LSTM (ONNX Runtime) | 0.33 | 0.35 | 136 MB |
+| Transformer (ONNX Runtime) | 0.44 | 0.46 | 137 MB |
+
+The slowest estimator, the Transformer, takes under 0.5 ms of each 1,000 ms sample period, and all four together about 1 ms. Peak memory is the whole Python process, so it is mostly the interpreter and libraries.
+
 ## Edge and cloud demo (Raspberry Pi)
 
 A small version of a cloud-connected BMS: estimation on an edge device, monitoring in the cloud. Setup guide: [demo/README.md](demo/README.md).
@@ -145,6 +157,7 @@ A small version of a cloud-connected BMS: estimation on an edge device, monitori
 - **Data on the device.** Three test cycles at 1 Hz ship in `demo/replay/` (25 °C UDDS, -20 °C UDDS, 10 °C US06), a small attributed excerpt of the dataset under its CC BY 4.0 licence, so the Pi needs neither the raw data nor the processing pipeline.
 - **Cloud** (`docs/index.html`): a static page served by GitHub Pages that subscribes with a read-only credential and plots SoC, SoC error, voltage, current and temperature, with a metrics table (RMSE, maximum error, compute time per step on the device).
 - **Tested** end to end in this repository against a local MQTT broker (TCP and WebSocket listeners), with the dashboard in headless Chrome: live updates, joining mid-run, and opening after the run from retained messages. The install was rehearsed in a clean environment with only `demo/requirements-pi.txt` (no PyTorch, no dataset): 66 tests pass.
+- **Run on a Raspberry Pi 5** (Raspberry Pi OS Trixie, installed from `demo/requirements-pi.txt`): 66 tests pass, and the edge loop on the 10 °C US06 cycle, with the EKF and coulomb counting started 20 points low, gives the same errors as on the development machine (RMSE 3.57 EKF, 1.72 LSTM, 1.41 Transformer, 19.78 coulomb counting) at 0.20, 0.35 and 0.45 ms per step for the EKF, LSTM and Transformer, with the CPU at 37 °C. A Pi 5 needs a supply that holds 5 V under load: a generic 5 V, 3 A USB-A adapter made it switch itself off at random; with another charger it ran normally (5.33 V measured at the board).
 
 ## Smart battery over SMBus
 
@@ -260,7 +273,7 @@ run_all.py      one-command reproduction
 - **The selected EKF settings sit at the edge of the search grid** for one parameter (`q_v`) with the calibrated model and for all three with the 2RC model.
 - **Networks were trained with one seed**, so seed-to-seed spread is not reported.
 - **The 40 °C data is incomplete**: three training cycles and no validation cycles.
-- **Cost was measured on a cloud virtual machine only.** Raspberry Pi 5 numbers are not yet in the table; step 5 of [demo/README.md](demo/README.md) produces them.
+- **Cost was measured on two machines**, a cloud virtual machine and a Raspberry Pi 5, not on a microcontroller-class BMS processor.
 - **The edge demo replays recorded data.** There is no live cell or sensing hardware, and the reference SoC on the dashboard is the laboratory's.
 - **The SMBus and BQ27426 paths are tested on emulated gauges only.** The protocol handling follows the specification, but timing, clock stretching, sleep modes and vendor quirks of real gauges are untested, and the emulated gauge says nothing about how a commercial fuel gauge performs.
 - **No UKF** and no adaptive filter were implemented.

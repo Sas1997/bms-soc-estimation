@@ -1,0 +1,6 @@
+estimator,ms_per_step_median,ms_per_step_p99,peak_rss_mb,table_or_weight_values,storage_kb,label,cpu,machine,python,steps
+Coulomb counting,0.0005929999815634801,0.0007267799952614957,109.8125,0,0.0,raspberry-pi-5,"Raspberry Pi 5 Model B (8 GB), Arm Cortex-A76",aarch64,3.13.5,1000
+"EKF, 2RC (HPPC only)",0.15296299997658025,0.16525440001061042,109.703125,1731,37.9228515625,raspberry-pi-5,"Raspberry Pi 5 Model B (8 GB), Arm Cortex-A76",aarch64,3.13.5,1000
+"EKF, 3RC (calibrated)",0.15311199999246128,0.16624797999782004,109.65625,1941,43.0478515625,raspberry-pi-5,"Raspberry Pi 5 Model B (8 GB), Arm Cortex-A76",aarch64,3.13.5,1000
+LSTM (ONNX Runtime),0.33459200000152123,0.3477823099913735,136.390625,4769,23.138671875,raspberry-pi-5,"Raspberry Pi 5 Model B (8 GB), Arm Cortex-A76",aarch64,3.13.5,1000
+Transformer (ONNX Runtime),0.44456349999677514,0.4622469800000317,136.921875,17697,99.1357421875,raspberry-pi-5,"Raspberry Pi 5 Model B (8 GB), Arm Cortex-A76",aarch64,3.13.5,1000
